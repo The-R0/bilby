@@ -48,6 +48,11 @@ class AgentLoop(
         // 上一轮工具返回过的视频展示信息(标题/封面/UP)。同样要跨轮累积:追问上一轮的
         // 视频时若查不到展示信息,卡片就只剩一个裸 bvid。
         priorTraces: Map<String, TraceItem> = emptyMap(),
+        /**
+         * 跨会话记忆(save_memory 存下的事实),拼进 system。**条数在代码里封顶**
+         * ([MAX_MEMORY_ITEMS]),超出只带最近的 —— 上限同 12 步、5 条出处一样,是规矩不是请求。
+         */
+        memories: List<String> = emptyList(),
         // 本轮新产生的消息与累积的状态,交给调用方落库。不做成事件是因为它属于持久化
         // 关注点,混进 UI 事件流里每个消费方都要处理一个自己用不上的分支。
         onTurnComplete: (
@@ -68,7 +73,7 @@ class AgentLoop(
         // `drop(newFrom)`,起点在本轮的用户输入上,system 从来就没进过 history —— 只在
         // 首轮插一次的写法于是让第二轮起完全没有 system 消息,[[bvid]] 的引用格式和溯源
         // 约束都只写在里面。
-        val messages = mutableListOf(ChatMessage(role = ChatMessage.ROLE_SYSTEM, content = SYSTEM_PROMPT))
+        val messages = mutableListOf(ChatMessage(role = ChatMessage.ROLE_SYSTEM, content = systemPrompt(memories)))
         messages += history
         messages += ChatMessage(role = ChatMessage.ROLE_USER, content = intent.toPrompt())
         // 新消息从这里开始(本轮的用户输入也算),用于回传给持久化层
@@ -294,6 +299,20 @@ class AgentLoop(
     private companion object {
         const val MAX_TOOL_STEPS = 12
         const val MAX_RESULTS = 5
+
+        /** 带进一轮请求的记忆条数上限。超出的留着,只是这一轮不带上。 */
+        const val MAX_MEMORY_ITEMS = 30
+
+        /**
+         * 记忆是 system 尾部的一段附录:有就拼,没有就还是那段裸 prompt —— 不配置的模型
+         * 与记过事的用户不该读出两份形状不同的指令。
+         */
+        fun systemPrompt(memories: List<String>): String {
+            if (memories.isEmpty()) return SYSTEM_PROMPT
+            val items = memories.takeLast(MAX_MEMORY_ITEMS)
+            return SYSTEM_PROMPT + "\n\n你还记得这些关于用户的事(往次对话里记下的,与本次问题相关时再用,不相干就当不存在):\n" +
+                items.joinToString("\n") { "- $it" }
+        }
 
         /**
          * `[[BV1xx4y1x7xx]]` 形式的引用。bvid 的字符集是 base58,这里不收窄,交给白名单校验。

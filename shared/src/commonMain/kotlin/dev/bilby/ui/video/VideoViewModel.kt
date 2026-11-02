@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.bilby.BiliLog
 import dev.bilby.agent.AgentTurnState
+import dev.bilby.data.AgentSessionRepository
 import dev.bilby.agent.reduce
 import dev.bilby.agent.AgentIntent
 import dev.bilby.agent.AgentLoop
@@ -118,6 +119,7 @@ class VideoViewModel(
     initialBvid: String,
     private val repository: VideoRepository,
     private val agentLoop: AgentLoop,
+    private val sessions: AgentSessionRepository,
     private val actionRepository: VideoActionRepository,
     private val settings: SettingsStore,
     private val sponsorBlockRepository: SponsorBlockRepository,
@@ -574,6 +576,35 @@ class VideoViewModel(
         observePlaybackPosition(target)
         observeDanmakuCid(target)
         observeSubtitleTracks(target)
+        restoreRelatedSession(target)
+    }
+
+    /**
+     * 这条视频上次「找相关」的那段会话(contextKey = bvid)。读回来 started = true,再点一次
+     * 找相关只是打开面板,追问接着当时的上下文。代数检查同 [load]:切集的中途读回来的旧段
+     * 不许落进新视频的状态。
+     */
+    private fun restoreRelatedSession(target: String) {
+        videoScope.launch {
+            val startGeneration = generation
+            val stored = runCatching { sessions.getSessionByContext(target) }
+                .onFailure { BiliLog.w("读找相关会话失败", it) }
+                .getOrNull() ?: return@launch
+            val turns = sessions.loadTurns(stored.id)
+            if (turns.isEmpty()) return@launch
+            val (seen, traceMap) = sessions.loadVideos(stored.id)
+            val messages = sessions.loadMessages(stored.id)
+            ifCurrent(startGeneration) {
+                relatedSessionId = stored.id
+                relatedHistory = messages
+                relatedSeen = seen
+                relatedTraces = traceMap
+                _related.value = RelatedState(
+                    started = true,
+                    turns = turns.map { RelatedTurn(id = nextRelatedTurnId++, question = it.query, result = it.state) },
+                )
+            }
+        }
     }
 
     /** 迟到的写结果只有在代数没变时才准落回页面,理由见 [generation]。 */
@@ -795,13 +826,23 @@ class VideoViewModel(
      * 只在用户显式点击时才跑(DESIGN 2.3):它占的是官方"相关推荐"的位置,但不能有
      * 相关推荐的行为 —— 自动加载就等于把永不实现清单里的东西装了回来。
      *
-     * 每次点都开一段新会话:之前的追问一并丢掉。
+     * 会话落在库里(contextKey = bvid):关掉再回来这一段还在,追问接着当时的上下文。
+     * 「重新检索」才是开新一段的入口。
      */
     fun findRelated() {
         val detail = _state.value.detail ?: return
         resetRelatedSession()
         _related.value = RelatedState(started = true)
         startRelatedTurn(question = null, intent = AgentIntent.Related(bvid, detail.title, detail.up.name))
+    }
+
+    /** 「重新检索」:旧会话连库带上下文一起清,从第一轮重跑。 */
+    fun restartRelated() {
+        videoScope.launch {
+            runCatching { sessions.deleteSessionByContext(bvid) }
+                .onFailure { BiliLog.w("清找相关会话失败", it) }
+            findRelated()
+        }
     }
 
     /**
@@ -821,16 +862,21 @@ class VideoViewModel(
         runRelatedTurn(last.id, AgentIntent.Query(question))
     }
 
-    // 会话内多轮共享的上下文,同搜索页 SearchChatViewModel 的那三样。换视频时清掉。
+    // 会话内多轮共享的上下文,同搜索页 SearchChatViewModel 的那三样。换视频时清掉,
+    // 但库里(contextKey = bvid)的那份还在 —— 下次打开这条视频读回来。
     private var relatedHistory: List<ChatMessage> = emptyList()
     private var relatedSeen: Set<String> = emptySet()
     private var relatedTraces: Map<String, TraceItem> = emptyMap()
     private var relatedJob: Job? = null
     private var nextRelatedTurnId = 1L
 
+    /** 这段找相关在库里的会话 id,null 是还没跑过第一轮。 */
+    private var relatedSessionId: Long? = null
+
     private fun resetRelatedSession() {
         relatedJob?.cancel()
         relatedJob = null
+        relatedSessionId = null
         relatedHistory = emptyList()
         relatedSeen = emptySet()
         relatedTraces = emptyMap()
@@ -848,15 +894,30 @@ class VideoViewModel(
         updateRelatedTurn(turnId) { AgentTurnState(running = true) }
         relatedJob = videoScope.launch {
             try {
+                // 库坏了退回纯内存,理由同搜索页 runAgent。
+                val id = runCatching {
+                    relatedSessionId ?: sessions.newSession(
+                        title = _state.value.detail?.title ?: bvid,
+                        contextKey = bvid,
+                    ).also { relatedSessionId = it }
+                }.onFailure { BiliLog.w("找相关会话建行失败,本轮只留在内存", it) }.getOrNull()
+                val memories = runCatching { sessions.recentMemories() }
+                    .onFailure { BiliLog.w("读助理记忆失败", it) }
+                    .getOrElse { emptyList() }
                 agentLoop.run(
                     intent = intent,
                     history = relatedHistory,
                     priorBvids = relatedSeen,
                     priorTraces = relatedTraces,
+                    memories = memories,
                     onTurnComplete = { newMessages, seen, traces ->
                         relatedHistory = relatedHistory + newMessages
                         relatedSeen = seen
                         relatedTraces = traces
+                        if (id != null) viewModelScope.launch {
+                            sessions.appendMessages(id, newMessages)
+                            sessions.upsertVideos(id, seen, traces)
+                        }
                     },
                 ).collect { event ->
                     // 折叠规则与搜索页是同一份(agent/AgentTurn.kt)。这里曾经另写一份,
@@ -866,7 +927,19 @@ class VideoViewModel(
             } finally {
                 // 收在 finally 里,理由同 SearchChatViewModel.runAgent:被取消的那一轮也要停下转圈。
                 updateRelatedTurn(turnId) { it.copy(running = false) }
+                persistRelatedTurn(turnId)
             }
+        }
+    }
+
+    /** 把这一轮的界面状态写进库,与搜索页 persistTurn 同一份规矩:按下标覆盖,重试不追加。 */
+    private fun persistRelatedTurn(turnId: Long) {
+        val sid = relatedSessionId ?: return
+        val index = _related.value.turns.indexOfFirst { it.id == turnId }
+        val turn = _related.value.turns.getOrNull(index) ?: return
+        viewModelScope.launch {
+            runCatching { sessions.saveTurn(sid, index, turn.question, turn.result.copy(running = false)) }
+                .onFailure { BiliLog.w("找相关轮次落库失败", it) }
         }
     }
 

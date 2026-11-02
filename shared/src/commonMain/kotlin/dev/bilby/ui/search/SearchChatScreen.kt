@@ -20,6 +20,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import dev.bilby.data.SearchSuggestion
+import dev.bilby.data.db.AgentMemoryEntity
+import dev.bilby.data.db.AgentSessionEntity
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.minimumInteractiveComponentSize
@@ -40,6 +42,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -48,6 +51,8 @@ import androidx.compose.material.icons.Icons
 import dev.bilby.ui.components.PillInputField
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.DropdownMenu
@@ -63,6 +68,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -94,11 +100,14 @@ import dev.bilby.agent.TraceItem
 import dev.bilby.data.SearchVideo
 import dev.bilby.ui.components.EmptyState
 import dev.bilby.ui.components.KeepScrolledToBottom
+import dev.bilby.ui.components.PaneSheet
 import dev.bilby.ui.components.SearchField
 import dev.bilby.ui.components.SidePanelLayout
 import dev.bilby.ui.components.SidePanelToggle
 import dev.bilby.ui.components.rememberBottomFollow
+import dev.bilby.ui.formatRelativeTime
 import dev.bilby.ui.theme.BilbyTheme
+import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
 import kotlin.math.roundToInt
 
@@ -137,12 +146,17 @@ class AgentActions(
     val onNewSession: () -> Unit,
     val onRetry: () -> Unit,
     val onVideoClick: (bvid: String) -> Unit,
+    /** 打开一段旧会话续问。 */
+    val onSessionOpen: (id: Long) -> Unit,
+    val onSessionDelete: (id: Long) -> Unit,
+    val onMemoryDelete: (id: Long) -> Unit,
 )
 
 /**
  * 搜索 tab:一个搜索框,回车是 B 站原始结果;助理在旁边另起一块。
  *
- * - **普通搜索是一个搜索页**:搜索栏在顶上,下面是结果(或历史)。
+ * - **普通搜索有两张脸**:还没搜过是着陆页,字标加居中的框、下面是自己敲过的词;
+ *   搜过之后是结果页,搜索栏挪到顶上、下面是结果。
  * - **助理是一段对话**:输入在下,一轮轮结果在上。它是进阶工具,不是每个人都用:模型没配时
  *   它的入口一概不出现。
  *
@@ -170,6 +184,9 @@ fun SearchChatScreen(
     onAgentPanelWidthChange: (Float) -> Unit = {},
     /** 最近搜过的词,最近的在前。 */
     searchHistory: List<String> = emptyList(),
+    /** 助理存下的会话与记住的事,会话面板的内容。 */
+    agentSessions: List<AgentSessionEntity> = emptyList(),
+    agentMemories: List<AgentMemoryEntity> = emptyList(),
     onHistoryClick: (String) -> Unit = {},
     onHistoryRemove: (String) -> Unit = {},
     onHistoryClear: () -> Unit = {},
@@ -238,13 +255,28 @@ fun SearchChatScreen(
                     },
                 )
             },
-            panel = { AgentConversation(state.agent, state.agentInput, agentActions) },
+            panel = {
+                AgentConversation(
+                    state.agent,
+                    state.agentInput,
+                    agentActions,
+                    sessions = agentSessions,
+                    memories = agentMemories,
+                )
+            },
         )
     } else if (state.mode == SearchMode.Agent && agentAvailable) {
         BackHandler { onLeaveAgent() }
         Column(modifier = modifier.fillMaxSize()) {
             AgentTopBar(onBack = onLeaveAgent)
-            AgentConversation(state.agent, state.agentInput, agentActions, modifier = Modifier.weight(1f))
+            AgentConversation(
+                state.agent,
+                state.agentInput,
+                agentActions,
+                sessions = agentSessions,
+                memories = agentMemories,
+                modifier = Modifier.weight(1f),
+            )
         }
     } else {
         Box(modifier = modifier.fillMaxSize()) { normalSearch(null) }
@@ -258,6 +290,13 @@ private val AgentPanelMinWidth = 320.dp
 
 /** 宽屏搜索栏的最大宽度。再宽,左端的放大镜和右端的清除键就隔得太远,一眼看不全。 */
 private val SearchBarMaxWidth = 720.dp
+
+/**
+ * 着陆页的上下留白比。上 2 下 3:框的重心停在中线偏上,是搜索着陆页(Google、百度)
+ * 的通行摆法 —— 正中反而显得沉,偏上一点下面正好留给历史。
+ */
+private const val LandingTopWeight = 2f
+private const val LandingBottomWeight = 3f
 
 /** 搜索栏行尾那颗侧栏开关的宽度(M3 图标按钮的触控格)。 */
 private val PanelToggleWidth = 48.dp
@@ -281,11 +320,13 @@ private fun AgentTopBar(onBack: () -> Unit) {
 }
 
 /**
- * 普通搜索:搜索栏,下面是历史或结果。
+ * 普通搜索的两张脸:**还没搜过是着陆页**,字标与框居中、下面是自己敲过的词;
+ * **搜过之后是结果页**,搜索栏在顶上、下面是结果。
  *
  * **聚焦时就是 M3 search 的展开态**,建议(这里是历史)的摆法按窗口分:窄屏整块换成历史
  * (full-screen 布局),宽屏从搜索栏下方垂下一张卡,底下的结果盖一层 scrim(docked 布局)。
- * search.md 原话是紧凑窗口用前者,中等以上换后者。
+ * search.md 原话是紧凑窗口用前者,中等以上换后者。着陆页不适用这一节:它没有结果可盖,
+ * 历史直接摆在框下面,不弹展开态。
  *
  * 窄屏的搜索栏随列表上滑收起、下滑露出(search.md Scroll 一节的第一种),结果多占一截屏。
  * 宽屏不收:竖向不缺那 64dp,而侧栏开关长在这一行上。
@@ -316,10 +357,6 @@ private fun NormalSearch(
     val askAgentFab = onAskAgent.takeIf { !wide }
     val fab = askAgentFab != null
 
-    val collapsing = remember { CollapsingBar() }
-    // 打字时和换了一次查询时栏一定在:前者正对着它,后者要看得见查的是什么。
-    LaunchedEffect(focused, state.query) { collapsing.offsetPx = 0f }
-
     val bar: @Composable ((@Composable (Modifier) -> Unit)?) -> Unit = { dropdown ->
         SearchBarRow(
             input = input,
@@ -338,10 +375,13 @@ private fun NormalSearch(
     val historyPanel: @Composable (Modifier) -> Unit = { panelModifier ->
         SearchHistoryPanel(history, onHistoryClick, onHistoryRemove, onHistoryClear, panelModifier)
     }
+    val suggestionPanel: @Composable (Modifier) -> Unit = { panelModifier ->
+        SuggestionPanel(suggestions, onSuggestionClick, panelModifier)
+    }
     // 聚焦时盖在结果上的那一块:正在打字而且有补全就是补全,否则是历史。
     val typing = focused && input.isNotBlank() && suggestions.isNotEmpty()
     val focusPanel: (@Composable (Modifier) -> Unit)? = when {
-        typing -> { panelModifier -> SuggestionPanel(suggestions, onSuggestionClick, panelModifier) }
+        typing -> suggestionPanel
         history.isNotEmpty() -> historyPanel
         else -> null
     }
@@ -364,20 +404,54 @@ private fun NormalSearch(
             panel(Modifier.fillMaxSize().verticalScroll(rememberScrollState()))
         }
     }
+
+    // **还没搜过时是着陆页,不是顶栏版搜索页**:字标加居中搜索框,重心停在中线偏上,
+    // 框下面是自己敲过的词;打出一个字,那块换成补全。发出第一个查询之后才翻成下面的
+    // 顶栏 + 结果,重按搜索 tab 回得来(见 RootTabs)。
+    if (state.query.isEmpty()) {
+        val landingPanel = when {
+            input.isNotBlank() && suggestions.isNotEmpty() -> suggestionPanel
+            history.isNotEmpty() -> historyPanel
+            else -> null
+        }
+        Box(modifier = Modifier.fillMaxSize()) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                Spacer(Modifier.weight(LandingTopWeight))
+                Text(
+                    text = stringResource(Res.string.app_name),
+                    style = MaterialTheme.typography.displayMediumEmphasized,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Spacer(Modifier.height(Spacing.Spacious))
+                bar(null)
+                Box(modifier = Modifier.weight(LandingBottomWeight)) {
+                    landingPanel?.let { scrollingPanel(it) }
+                }
+            }
+            if (!focused) {
+                askAgentFab?.let {
+                    AskAgentFab(
+                        onClick = it,
+                        expanded = true,
+                        modifier = Modifier.align(Alignment.BottomEnd),
+                    )
+                }
+            }
+        }
+        return
+    }
+
+    val collapsing = remember { CollapsingBar() }
+    // 打字时和换了一次查询时栏一定在:前者正对着它,后者要看得见查的是什么。
+    LaunchedEffect(focused, state.query) { collapsing.offsetPx = 0f }
+
     val body: @Composable () -> Unit = {
         when {
             // 窄屏展开态:整块换成补全或历史(full-screen 布局)。
             !wide && focused && focusPanel != null -> scrollingPanel(focusPanel)
-
-            // 还没搜过时历史就是正文。
-            state.query.isEmpty() && history.isNotEmpty() -> scrollingPanel(historyPanel)
-
-            state.query.isEmpty() -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                EmptyState(
-                    message = stringResource(Res.string.search_empty),
-                    icon = Icons.Outlined.Search,
-                )
-            }
 
             else -> Column(modifier = Modifier.fillMaxSize()) {
                 uidCandidate(state.query)?.let { mid ->
@@ -395,8 +469,8 @@ private fun NormalSearch(
             }
         }
     }
-    // 宽屏展开态的卡片。历史已经是正文(还没搜过)时不再垂一份一样的下来。
-    val dockedPanel = focusPanel.takeIf { focused && (typing || state.query.isNotEmpty()) }
+    // 宽屏展开态的卡片。
+    val dockedPanel = focusPanel.takeIf { focused }
 
     if (wide) {
         // 搜索栏叠在最上层:展开时它向下长成一张卡,压在结果与 scrim 之上。
@@ -790,8 +864,11 @@ private fun AgentConversation(
     state: AgentSearchState,
     input: String,
     actions: AgentActions,
+    sessions: List<AgentSessionEntity>,
+    memories: List<AgentMemoryEntity>,
     modifier: Modifier = Modifier,
 ) {
+    var libraryOpen by rememberSaveable { mutableStateOf(false) }
     Column(modifier = modifier.fillMaxSize()) {
         Box(modifier = Modifier.weight(1f)) {
             AgentPane(state = state, onVideoClick = actions.onVideoClick, onRetry = actions.onRetry)
@@ -802,8 +879,121 @@ private fun AgentConversation(
             onSend = actions.onSend,
             // 开新会话是清空助理上下文的唯一入口(DESIGN 3.1:会话必须由用户显式开启)。
             onNewSession = actions.onNewSession,
+            onOpenLibrary = { libraryOpen = true },
             modifier = Modifier.fillMaxWidth(),
         )
+    }
+
+    if (libraryOpen) {
+        PaneSheet(onDismissRequest = { libraryOpen = false }) {
+            LazyColumn(modifier = Modifier.bodyHeight(LibrarySheetFraction)) {
+                item(key = "sessions-header") {
+                    LibraryHeader(stringResource(Res.string.agent_sessions))
+                }
+                if (sessions.isEmpty()) {
+                    item(key = "sessions-empty") {
+                        LibraryEmpty(stringResource(Res.string.agent_sessions_empty))
+                    }
+                } else {
+                    items(sessions, key = { "session-${it.id}" }) { session ->
+                        SessionRow(
+                            session = session,
+                            onOpen = {
+                                actions.onSessionOpen(session.id)
+                                libraryOpen = false
+                            },
+                            onDelete = { actions.onSessionDelete(session.id) },
+                        )
+                    }
+                }
+                item(key = "memories-header") {
+                    LibraryHeader(stringResource(Res.string.agent_memory_section))
+                }
+                if (memories.isEmpty()) {
+                    item(key = "memories-empty") {
+                        LibraryEmpty(stringResource(Res.string.agent_memory_empty))
+                    }
+                } else {
+                    items(memories, key = { "memory-${it.id}" }) { memory ->
+                        LibraryRow(
+                            text = memory.content,
+                            onClick = null,
+                            onDelete = { actions.onMemoryDelete(memory.id) },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private const val LibrarySheetFraction = 0.7f
+
+/** 面板里一节的名字。「会话记录」「记住的事」各一行。 */
+@Composable
+private fun LibraryHeader(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
+    )
+}
+
+@Composable
+private fun LibraryEmpty(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+    )
+}
+
+@Composable
+private fun SessionRow(
+    session: AgentSessionEntity,
+    onOpen: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    LibraryRow(
+        text = session.title,
+        meta = formatRelativeTime(session.lastActiveAt / 1000),
+        onClick = onOpen,
+        onDelete = onDelete,
+    )
+}
+
+/** 会话与记忆共用的一行:点开(记忆不可点)与删除两档。 */
+@Composable
+private fun LibraryRow(
+    text: String,
+    meta: String? = null,
+    onClick: (() -> Unit)?,
+    onDelete: () -> Unit,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = Dimens.MinTouchTarget)
+            .clickable(enabled = onClick != null) { onClick?.invoke() }
+            .padding(start = Spacing.Comfortable, end = Spacing.Hair, top = Spacing.Tight, bottom = Spacing.Tight),
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(text = text, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            meta?.let {
+                Text(text = it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        IconButton(onClick = onDelete) {
+            Icon(
+                imageVector = Icons.Outlined.Delete,
+                contentDescription = stringResource(Res.string.action_delete),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(Dimens.IconInline),
+            )
+        }
     }
 }
 
@@ -881,6 +1071,7 @@ private fun InputBar(
     onInputChange: (String) -> Unit,
     onSend: () -> Unit,
     onNewSession: () -> Unit,
+    onOpenLibrary: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     PillInputField(
@@ -894,9 +1085,13 @@ private fun InputBar(
         sending = false,
         onSend = onSend,
         // 新会话:把助理上下文清掉的**动作**。普通搜索没有会话,这个按钮只长在这里。
+        // 会话记录在它右边:开过的段落在里面,点开就续上。
         leading = {
             IconButton(onClick = onNewSession) {
                 Icon(Icons.Filled.Add, contentDescription = stringResource(Res.string.search_new_session))
+            }
+            IconButton(onClick = onOpenLibrary) {
+                Icon(Icons.Outlined.History, contentDescription = stringResource(Res.string.agent_sessions))
             }
         },
         modifier = modifier.padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
@@ -923,6 +1118,20 @@ private fun previewTrace(bvid: String, title: String) = TraceItem(
     coverUrl = "https://i0.hdslb.com/bfs/archive/preview.jpg",
     upName = "某知名UP主",
 )
+
+@Preview
+@Composable
+private fun SearchChatScreenLandingPreview() {
+    BilbyTheme {
+        SearchChatScreen(
+            state = SearchChatUiState(mode = SearchMode.Normal),
+            onInputChange = {}, onSearch = {}, onAskAgent = {}, onLeaveAgent = {},
+            agentActions = PreviewAgentActions, resultActions = PreviewResultActions,
+            agentAvailable = true,
+            searchHistory = listOf("宝可梦", "烹饪 一人食", "坂本龙一", "M3 Expressive"),
+        )
+    }
+}
 
 @Preview
 @Composable
@@ -990,6 +1199,7 @@ private fun SearchChatScreenAgentAnswerPreview() {
 
 private val PreviewAgentActions = AgentActions(
     onInputChange = {}, onSend = {}, onNewSession = {}, onRetry = {}, onVideoClick = {},
+    onSessionOpen = {}, onSessionDelete = {}, onMemoryDelete = {},
 )
 
 private val PreviewResultActions = SearchResultActions(

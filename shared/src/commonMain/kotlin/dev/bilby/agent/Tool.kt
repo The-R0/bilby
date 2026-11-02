@@ -7,7 +7,7 @@ import kotlinx.serialization.json.JsonObject
  * 「搜了」「读了」「瞟了一眼」这类助理自述的口吻试过,读起来像助理在旁边说话,而这一栏要的是
  * 扫一眼就知道它查过什么。
  */
-enum class StepKind { SearchVideos, SearchUsers, Up, UpVideos, Video, Comments, Collection, Related, Other }
+enum class StepKind { SearchVideos, SearchUsers, Up, UpVideos, Video, Comments, Collection, Related, Memory, Other }
 
 /**
  * 过程直播里用到的名字:视频标题、UP 名、合集标题。**只来自本轮之前的工具返回**,查不到就退回

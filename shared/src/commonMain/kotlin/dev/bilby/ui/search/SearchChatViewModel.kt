@@ -8,9 +8,12 @@ import dev.bilby.agent.AgentTurnState
 import dev.bilby.agent.ChatMessage
 import dev.bilby.agent.TraceItem
 import dev.bilby.agent.reduce
+import dev.bilby.data.AgentSessionRepository
 import dev.bilby.data.SearchRepository
 import dev.bilby.BiliLog
 import dev.bilby.data.SettingsStore
+import dev.bilby.data.db.AgentMemoryEntity
+import dev.bilby.data.db.AgentSessionEntity
 import dev.bilby.data.SidePanelId
 import dev.bilby.ui.BilbyLink
 import androidx.navigation3.runtime.NavKey
@@ -55,13 +58,14 @@ enum class SearchOrder(val apiValue: String, val labelRes: StringResource) {
  * 要存搜索历史。两者不是一回事 —— 热搜词是把别人的热门查询推给你,搜索历史是你自己敲过的字,
  * 前者是推送式入口,后者只是省一次重复输入。
  *
- * 助理那一路的提问**不记**:它的上下文按 DESIGN 3.3 只含本次意图,把提问攒成一份可点的清单
- * 等于给它做了一份会话历史。
+ * 助理那一路的提问进的是会话表([AgentSessionRepository]),不是搜索历史:搜索历史是省一次
+ * 重复输入的词的清单,会话是一段可回看的对话,两者各管各的。会话列表在助理那一侧的会话面板里。
  */
 class SearchChatViewModel(
     private val searchRepository: SearchRepository,
     private val agentLoop: AgentLoop,
     private val settings: SettingsStore,
+    private val sessions: AgentSessionRepository,
     /** 展开 b23.tv 短链,即 `BiliClient.resolveRedirect`。 */
     private val resolveShortLink: suspend (String) -> String,
 ) : ViewModel() {
@@ -104,13 +108,28 @@ class SearchChatViewModel(
 
     fun setAgentPanelWidth(widthDp: Float) = viewModelScope.launch { settings.saveSidePanelWidth(SidePanelId.SearchAgent, widthDp) }
 
+    /** 可挑的会话列表与记住的事,供助理的会话面板。 */
+    val agentSessions: StateFlow<List<AgentSessionEntity>> = sessions.observeSessions()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    val memories: StateFlow<List<AgentMemoryEntity>> = sessions.observeMemories()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    fun deleteMemory(id: Long) = viewModelScope.launch { sessions.deleteMemory(id) }
+
     /**
      * 会话内多轮共享的上下文(DESIGN 3.1 修订)。**只含本会话的对话与工具返回**,
      * 观看历史一个字都不会进来。会话由用户点"新会话"显式开启,不自动续接。
+     *
+     * 这一段同时落库([sessions]):消息是续上下文的回放,轮次是回看时的界面,
+     * 视频是溯源白名单。打开旧会话就是把它三样一并读回来。
      */
     private var history: List<ChatMessage> = emptyList()
     private var seenBvids: Set<String> = emptySet()
     private var traces: Map<String, TraceItem> = emptyMap()
+
+    /** 当前会话在库里的 id。null 是还没问过或刚点了新会话,第一轮提问时才建行。 */
+    private var sessionId: Long? = null
 
     /**
      * 正在跑的那一轮。**开新会话和再次发问都必须先把它取消掉。**
@@ -122,14 +141,42 @@ class SearchChatViewModel(
      */
     private var agentJob: Job? = null
 
-    /** 开新会话:销毁旧的那一轮并丢弃它的上下文。 */
+    /** 开新会话:销毁旧的那一轮并丢弃它的上下文。库里的记录留着,会话列表里还能找到。 */
     fun newSession() {
         agentJob?.cancel()
         agentJob = null
+        sessionId = null
         history = emptyList()
         seenBvids = emptySet()
         traces = emptyMap()
         _state.update { it.copy(agent = AgentSearchState()) }
+    }
+
+    /**
+     * 打开一段旧会话:上下文(消息、白名单、展示信息)与轮次一并读回,接着问就是续着它问。
+     * 正在跑的那一轮先停掉,和开新会话同一个理由。
+     */
+    fun openSession(id: Long) {
+        if (sessionId == id) return
+        agentJob?.cancel()
+        agentJob = null
+        viewModelScope.launch {
+            val (seen, traceMap) = sessions.loadVideos(id)
+            val turns = sessions.loadTurns(id).map { stored ->
+                SearchTurn(id = nextTurnId++, query = stored.query.orEmpty(), result = stored.state)
+            }
+            sessionId = id
+            history = sessions.loadMessages(id)
+            seenBvids = seen
+            traces = traceMap
+            _state.update { it.copy(agent = AgentSearchState(turns = turns), mode = SearchMode.Agent) }
+        }
+    }
+
+    /** 删掉一段会话。正在看的那一段被删等于开新会话。 */
+    fun deleteSession(id: Long) {
+        if (sessionId == id) newSession()
+        viewModelScope.launch { sessions.deleteSession(id) }
     }
 
     private val _state = MutableStateFlow(SearchChatUiState())
@@ -182,6 +229,16 @@ class SearchChatViewModel(
 
     /** 窄屏回到普通搜索。助理那段对话留着,再问一次还接得上。 */
     fun leaveAgent() = _state.update { it.copy(mode = SearchMode.Normal) }
+
+    /**
+     * 重按搜索 tab:清掉当前查询与输入框,翻回着陆页(居中的框 + 自己敲过的词)。
+     * 助理那一屏开着的话一并退回普通模式;助理的对话不动,它有自己的会话。
+     */
+    fun backToLanding() {
+        suggestJob?.cancel()
+        normal.clear()
+        _state.update { it.copy(input = "", suggestions = emptyList(), mode = SearchMode.Normal) }
+    }
 
     /**
      * 普通搜索是一次查询一份结果,不累积轮次:它就是一个搜索页。留着上一次的结果只会让人往上翻,
@@ -277,11 +334,8 @@ class SearchChatViewModel(
     }
 
     /**
-     * 会话只活在内存里,随 ViewModel 生灭,不落库。
-     *
-     * 助理上下文是一次性的:它只含本次意图(DESIGN 3.3 第 4 条),用户开新会话就是明确表示
-     * 不要它了。存下来既没有消费方(这一版没有会话列表),又要为"该不该续接"反复做判断,
-     * 而任何续接都在把上下文变成一份沉淀的画像。
+     * 跑一轮并把整段落库。会话在第一轮提问时才建行(标题取问题开头),空的"新会话"不会
+     * 留下一行占位 —— 那正是会话列表里不该出现的东西。
      */
     private fun runAgent(turnId: Long, query: String) {
         // 上一轮还在跑就先停掉:同一个会话里两个循环并行会交替往 history 上追加,
@@ -289,15 +343,30 @@ class SearchChatViewModel(
         agentJob?.cancel()
         agentJob = viewModelScope.launch {
             try {
+                // 库坏了不让整轮跟着死:记忆与会话只是回放层的副本,跑不动就退回纯内存,
+                // 与落库之前的行为一致。
+                val id = runCatching {
+                    sessionId
+                        ?: sessions.newSession(query.take(SESSION_TITLE_LENGTH)).also { sessionId = it }
+                }.onFailure { BiliLog.w("助理会话建行失败,本轮只留在内存", it) }.getOrNull()
+                val memories = runCatching { sessions.recentMemories() }
+                    .onFailure { BiliLog.w("读助理记忆失败", it) }
+                    .getOrElse { emptyList() }
                 agentLoop.run(
                     intent = AgentIntent.Query(query),
                     history = history,
                     priorBvids = seenBvids,
                     priorTraces = traces,
+                    memories = memories,
                     onTurnComplete = { newMessages, seen, newTraces ->
                         history = history + newMessages
                         seenBvids = seen
                         traces = newTraces
+                        // 与 history 同步落一份:下一轮回放的是库里的消息,不是内存这份。
+                        if (id != null) viewModelScope.launch {
+                            sessions.appendMessages(id, newMessages)
+                            sessions.upsertVideos(id, seen, newTraces)
+                        }
                     },
                 ).collect { event ->
                     updateAgent(turnId) { it.reduce(event) }
@@ -308,7 +377,22 @@ class SearchChatViewModel(
                 // `_state.update` 不挂起,取消中照样执行;轮次已被"新会话"清掉时
                 // [updateAgent] 找不到这个 id,自然什么都不做。
                 updateAgent(turnId) { it.copy(running = false) }
+                persistTurn(turnId, query)
             }
+        }
+    }
+
+    /**
+     * 把这一轮的界面状态写进库,供重新打开会话时原样回看。按轮次下标覆盖:重试的那一轮
+     * 落的是同一条记录,不是第二条。
+     */
+    private fun persistTurn(turnId: Long, query: String) {
+        val sid = sessionId ?: return
+        val index = _state.value.agent.turns.indexOfFirst { it.id == turnId }
+        val turn = _state.value.agent.turns.getOrNull(index) ?: return
+        viewModelScope.launch {
+            runCatching { sessions.saveTurn(sid, index, query, turn.result.copy(running = false)) }
+                .onFailure { BiliLog.w("助理轮次落库失败", it) }
         }
     }
 
@@ -326,6 +410,9 @@ class SearchChatViewModel(
 
     private companion object {
         const val SUGGEST_DEBOUNCE_MS = 200L
+
+        /** 会话标题取第一个问题的开头,列表里认得出是哪一段就够。 */
+        const val SESSION_TITLE_LENGTH = 24
     }
 }
 

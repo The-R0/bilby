@@ -4,10 +4,12 @@ import dev.bilby.agent.AgentLoop
 import dev.bilby.agent.LlmClient
 import dev.bilby.agent.ToolRegistry
 import dev.bilby.agent.createBiliTools
+import dev.bilby.agent.saveMemoryTool
 import dev.bilby.api.BiliClient
 import dev.bilby.api.DeviceFingerprint
 import dev.bilby.api.WbiSigner
 import dev.bilby.data.AccountRepository
+import dev.bilby.data.AgentSessionRepository
 import dev.bilby.data.ArticleRepository
 import dev.bilby.data.DanmakusRepository
 import dev.bilby.data.DynamicFeedStore
@@ -257,9 +259,15 @@ class AppContainer(val platform: Platform) {
         LlmClient(httpClient, json) { settings.llmConfig.first() }
     }
 
+    /** 助理会话与跨会话记忆的持久化。 */
+    val agentSessionRepository: AgentSessionRepository by lazy {
+        AgentSessionRepository(database, json)
+    }
+
     private val toolRegistry: ToolRegistry by lazy {
         ToolRegistry(
-            createBiliTools(searchRepository, videoRepository, spaceRepository, commentRepository, biliClient)
+            createBiliTools(searchRepository, videoRepository, spaceRepository, commentRepository, biliClient) +
+                saveMemoryTool(agentSessionRepository::addMemory)
         )
     }
 
