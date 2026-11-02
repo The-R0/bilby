@@ -30,11 +30,23 @@ jobs:
       - uses: gradle/actions/setup-gradle@v5
 
       # 不配 BILBY_KEYSTORE:构建脚本回落到 debug 签名,出来的 APK 可以直接装。
+      #
+      # release 与 debug 各编一份,它们是**两个应用**:
+      # - release 包名是 dev.bilby,与官方发布包相同 —— 装它要先卸掉原版,
+      #   且是 R8 混淆过的,接近真实发版;
+      # - debug 包名是 dev.bilby.debug(applicationIdSuffix),与原版共存,
+      #   各自一份数据,拿来对比最方便。
       - name: Build
-        run: ./gradlew assembleRelease
+        run: ./gradlew assembleRelease assembleDebug
 
       - uses: actions/upload-artifact@v7
         with:
-          name: bilby-apk
+          name: bilby-apk-release
           path: app/build/outputs/apk/release/*.apk
+          retention-days: 14
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bilby-apk-debug
+          path: app/build/outputs/apk/debug/*.apk
           retention-days: 14
