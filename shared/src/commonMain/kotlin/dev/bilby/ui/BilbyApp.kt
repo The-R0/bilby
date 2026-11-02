@@ -1115,24 +1115,26 @@ private fun RootTabs(
     /** 搜索框里的编号或链接直接打开的那一页,可以是任何一种目的地。 */
     onOpen: (NavKey) -> Unit,
 ) {
-    var selected by rememberSaveable { mutableStateOf(RootTab.Feed) }
+    // 启动落在搜索页:它是通往全部内容的那个输入口(着陆页见 SearchChatScreen)。
+    var selected by rememberSaveable { mutableStateOf(RootTab.Search) }
     val windowSize = rememberBilbyWindowSize()
 
-    // 重按当前 tab 回到顶部,navigation-bar.md 的明文要求。
+    // 重按当前 tab 回到这一页的起点,navigation-bar.md 的明文要求。
     //
     // **每个 tab 一个计数器,不共用一个。** 共用的话,在动态页连点几下再切到个人页,
     // 个人页看到的是一个变过的计数器,会跟着滚一次它自己没被点过的。
     //
-    // 搜索页不接:那一页是对话式的,输入在下、一轮轮结果往上滚,顶端是最早的一轮,
-    // 回到顶不是"重来一次",而是翻到最旧的地方。
+    // 搜索页的"起点"是着陆页不是顶端:那一页是对话式的,没有"回到顶",搜过之后
+    // 重按是清掉查询翻回居中的框 —— 与回顶同一件事,都是回到进来的那一屏。
     var feedScrollToTop by remember { mutableIntStateOf(0) }
     var profileScrollToTop by remember { mutableIntStateOf(0) }
+    var searchHomeClicks by remember { mutableIntStateOf(0) }
     val onTabClick: (RootTab) -> Unit = { tab ->
         if (selected == tab) {
             when (tab) {
                 RootTab.Feed -> feedScrollToTop++
                 RootTab.Profile -> profileScrollToTop++
-                RootTab.Search -> Unit
+                RootTab.Search -> searchHomeClicks++
             }
         } else {
             selected = tab
@@ -1181,6 +1183,7 @@ private fun RootTabs(
                 feedScrollToTop = feedScrollToTop,
                 profileScrollToTop = profileScrollToTop,
                 focusSearchNonce = focusSearchNonce,
+                searchHomeClicks = searchHomeClicks,
                 container = container,
                 onVideoClick = onVideoClick,
                 onVideoInContext = onVideoInContext,
@@ -1218,6 +1221,7 @@ private fun RootTabs(
                     feedScrollToTop = feedScrollToTop,
                     profileScrollToTop = profileScrollToTop,
                     focusSearchNonce = focusSearchNonce,
+                    searchHomeClicks = searchHomeClicks,
                     container = container,
                     onVideoClick = onVideoClick,
                     onVideoInContext = onVideoInContext,
@@ -1343,6 +1347,8 @@ private fun RootTabsContent(
     feedScrollToTop: Int,
     profileScrollToTop: Int,
     focusSearchNonce: Int,
+    /** 每变一次就翻回着陆页,与回顶同一语义(搜索页没有"顶端"可回)。 */
+    searchHomeClicks: Int,
     container: AppContainer,
     onVideoClick: (String) -> Unit,
     onVideoInContext: (String, QueueContext) -> Unit,
@@ -1416,7 +1422,7 @@ private fun RootTabsContent(
                 )
 
                 // 不限宽:宽屏结果是格子、助理是侧栏,搜索框自己限宽(见 SearchChatScreen)。
-                RootTab.Search -> SearchPane(container, focusSearchNonce, onVideoClick, onUserClick, onOpenArticle, onOpen)
+                RootTab.Search -> SearchPane(container, focusSearchNonce, searchHomeClicks, onVideoClick, onUserClick, onOpenArticle, onOpen)
 
                 // 不限宽:宽屏每节是一排卡片,宽度换成条数(见 ProfileScreen);窄屏账号卡自己限宽。
                 RootTab.Profile -> ProfilePane(
@@ -1518,6 +1524,8 @@ private fun FeedPane(
 private fun SearchPane(
     container: AppContainer,
     focusSearchNonce: Int,
+    /** 重按搜索 tab 的次数:每变一次回一次着陆页。 */
+    searchHomeClicks: Int,
     onVideoClick: (String) -> Unit,
     onUserClick: (Long) -> Unit,
     onOpenArticle: (ArticleRef) -> Unit,
@@ -1531,22 +1539,36 @@ private fun SearchPane(
                     container.searchRepository,
                     container.agentLoop,
                     container.settings,
+                    container.agentSessionRepository,
                     resolveShortLink = container.biliClient::resolveRedirect,
                 )
             }
         },
     )
+    // **只认计数的变化,不认它的值。** 切走再切回来时 remember 重取当前值,effect 会再跑
+    // 一趟但两次读数相同 —— 没有那一下按下,就不该把结果页翻回着陆页。
+    var lastHomeClick by remember { mutableIntStateOf(searchHomeClicks) }
+    LaunchedEffect(searchHomeClicks) {
+        if (searchHomeClicks != lastHomeClick) {
+            lastHomeClick = searchHomeClicks
+            vm.backToLanding()
+        }
+    }
     val currentOnOpen by rememberUpdatedState(onOpen)
     LaunchedEffect(vm) { vm.open.collect { currentOnOpen(it) } }
     val state by vm.state.collectAsStateWithLifecycle()
     val history by vm.searchHistory.collectAsStateWithLifecycle()
     val agentAvailable by vm.agentAvailable.collectAsStateWithLifecycle()
     val agentPanel by vm.agentPanel.collectAsStateWithLifecycle()
+    val agentSessions by vm.agentSessions.collectAsStateWithLifecycle()
+    val agentMemories by vm.memories.collectAsStateWithLifecycle()
     RegisterPageRefresh(refreshing = state.normal.videos.loading && state.normal.videos.items.isNotEmpty(), onRefresh = vm::refresh)
     SearchChatScreen(
         state = state,
         focusSearchNonce = focusSearchNonce,
         searchHistory = history,
+        agentSessions = agentSessions,
+        agentMemories = agentMemories,
         onHistoryClick = vm::searchFromHistory,
         onHistoryRemove = vm::removeSearchHistory,
         onHistoryClear = vm::clearSearchHistory,
@@ -1565,6 +1587,9 @@ private fun SearchPane(
             onNewSession = vm::newSession,
             onRetry = vm::retryAgent,
             onVideoClick = onVideoClick,
+            onSessionOpen = vm::openSession,
+            onSessionDelete = vm::deleteSession,
+            onMemoryDelete = vm::deleteMemory,
         ),
         resultActions = SearchResultActions(
             onTabSelected = vm::onTabSelected,
@@ -3055,6 +3080,7 @@ private fun VideoPane(
                     bvid,
                     container.videoRepository,
                     container.agentLoop,
+                    container.agentSessionRepository,
                     container.videoActionRepository,
                     container.settings,
                     container.sponsorBlockRepository,
@@ -3133,6 +3159,7 @@ private fun VideoPane(
         onFindRelated = vm::findRelated,
         onAskRelated = vm::askRelated,
         onRetryRelated = vm::retryRelated,
+        onRestartRelated = vm::restartRelated,
         cached = cached,
         onCacheSelection = vm::cacheSelection,
         onUpClick = onUpClick,

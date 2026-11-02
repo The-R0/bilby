@@ -66,3 +66,112 @@ data class FeedCacheItemEntity(
         const val KIND_ARTICLE = "article"
     }
 }
+
+/**
+ * 助理的一段会话。搜索页的对话与播放页「找相关」是同一张表,[contextKey] 区分:
+ * 搜索会话是 null,找相关会话存它所属视频的 bvid —— 打开那条视频时按它找回这一段。
+ */
+@Entity(tableName = "agent_session")
+data class AgentSessionEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val createdAt: Long,
+    val lastActiveAt: Long,
+    val title: String,
+    val contextKey: String? = null,
+)
+
+/**
+ * 会话内的一条消息,对应 LlmProtocol.ChatMessage,原样回放给模型续上下文。
+ *
+ * toolCallsJson 直接存 ChatMessage.toolCalls 序列化后的字符串,不拆表:tool_calls 的结构
+ * 由 OpenAI 协议定死,我们不会查询它内部字段,只需要原样回放,拆表除了增加还原成本
+ * 没有别的好处。
+ */
+@Entity(
+    tableName = "agent_message",
+    foreignKeys = [
+        ForeignKey(
+            entity = AgentSessionEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["sessionId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [Index("sessionId")],
+)
+data class AgentMessageEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val sessionId: Long,
+    val seq: Int,
+    val role: String,
+    val content: String?,
+    val toolCallsJson: String?,
+    val toolCallId: String?,
+    val name: String?,
+    val createdAt: Long,
+)
+
+/**
+ * 一轮在界面上的样子:序列化的 AgentTurnState。重新打开会话时原样渲染,不必、也不能从
+ * 消息回放出来 —— 过程步骤的文字是当时认出来的名字拼的,消息里只有工具参数。
+ */
+@Entity(
+    tableName = "agent_turn",
+    foreignKeys = [
+        ForeignKey(
+            entity = AgentSessionEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["sessionId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    // seq 是这一轮在会话里的下标,同一会话内唯一:重试原地重跑的那一轮要覆盖旧行,
+    // 不能再插一行,否则列表里同一个问题出现两份回答。
+    indices = [Index(value = ["sessionId", "seq"], unique = true)],
+)
+data class AgentTurnEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val sessionId: Long,
+    val seq: Int,
+    /** 用户那一句提问。找相关的首轮没有提问(null),气泡不画。 */
+    val query: String?,
+    val stateJson: String,
+    val createdAt: Long,
+)
+
+/**
+ * 工具返回过的视频。**主键是 (sessionId, bvid),upsert 即去重**;展示信息可空,搜索用户
+ * 这类不带视频卡片的返回里只有 bvid 进白名单。用途是两个:下一轮溯源校验的白名单,
+ * 和回指旧视频时卡片的标题/封面/UP。
+ */
+@Entity(
+    tableName = "agent_video",
+    primaryKeys = ["sessionId", "bvid"],
+    foreignKeys = [
+        ForeignKey(
+            entity = AgentSessionEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["sessionId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [Index("sessionId")],
+)
+data class AgentVideoEntity(
+    val sessionId: Long,
+    val bvid: String,
+    val title: String?,
+    val coverUrl: String?,
+    val upName: String?,
+)
+
+/**
+ * 助理自己通过 save_memory 工具记下的事实(偏好、习惯、明确说过要记住的)。
+ * 每轮开跑时最近的几条拼进 system prompt;删的入口在助理的会话面板里。
+ */
+@Entity(tableName = "agent_memory")
+data class AgentMemoryEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val content: String,
+    val createdAt: Long,
+)

@@ -1,4 +1,5 @@
 <resources>
+    <string name="app_name">Bilby</string>
     <string name="action_back">Back</string>
     <string name="action_cancel">Cancel</string>
     <string name="nav_already_here">Already on this page</string>
@@ -127,10 +128,15 @@
     <string name="agent_step_comments">Top comments</string>
     <string name="agent_step_collection">Collection</string>
     <string name="agent_step_related">Related videos</string>
+    <string name="agent_step_memory">Memory</string>
     <string name="agent_process_expand">Show steps</string>
     <string name="agent_process_collapse">Hide steps</string>
     <string name="agent_running">Searching…</string>
     <string name="agent_no_result">No results</string>
+    <string name="agent_sessions">Sessions</string>
+    <string name="agent_sessions_empty">No sessions yet</string>
+    <string name="agent_memory_section">Remembered</string>
+    <string name="agent_memory_empty">Nothing remembered</string>
 
     <string name="toview_empty">Watch later is empty</string>
     <string name="toview_clear_finished">Clear watched</string>
@@ -305,6 +311,7 @@
     <string name="related_title_running">Related  searching</string>
     <string name="related_title_error">Related  failed</string>
     <string name="related_title_count">Related  %1$d</string>
+    <string name="related_restart">Search again</string>
 
     <string name="player_play">Play</string>
     <string name="player_pause">Pause</string>

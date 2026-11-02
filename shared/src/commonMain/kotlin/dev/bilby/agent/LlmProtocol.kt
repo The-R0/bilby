@@ -103,6 +103,7 @@ data class ToolResult(
 )
 
 /** 过程直播里可点的中间结果:助理翻到一半,用户看中了可以直接点走。 */
+@Serializable
 data class TraceItem(
     val bvid: String,
     val title: String,

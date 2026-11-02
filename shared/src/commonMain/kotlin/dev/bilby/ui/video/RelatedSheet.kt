@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.ui.Alignment
@@ -48,7 +49,8 @@ import dev.bilby.ui.windowDragArea
  * 找相关的面板,装在 [dev.bilby.ui.components.PaneSheet] 里(宽屏在右栏,窄屏是 sheet,见 VideoScreen)。
  *
  * 点「找相关」就跑第一轮;结果出来之后底部可以接着追问(「评论区怎么评价」「有没有更入门的」)。
- * 这一段会话以这条视频为上下文,离开这一页就丢掉,见 [VideoViewModel.askRelated]。
+ * 这一段会话以这条视频为上下文(contextKey = bvid),落在库里 —— 离开这一页再回来还能接着看,
+ * 标题行的「重新检索」才是清掉它的入口,见 [VideoViewModel.restartRelated]。
  *
  * **高度填满面板给的上限**,不跟着内容长:面板一动就要求用户重新找视线落点。高度不变之后,
  * 内容增长只表现为面板内部滚动 —— 于是检索过程要自己跟着往下走(见 [KeepScrolledToBottom]),
@@ -63,6 +65,8 @@ fun RelatedSheet(
     modifier: Modifier = Modifier,
     /** 标题行右端的关闭。右栏里给;底部 sheet 有把手和下拉,不给。 */
     onClose: (() -> Unit)? = null,
+    /** 「重新检索」:旧会话连库清掉重跑。跑的时候不给 —— 它和追问互斥的理由同发送键。 */
+    onRestart: (() -> Unit)? = null,
 ) {
     val first = related.turns.firstOrNull()?.result
     val videoCount = first?.answer?.sources?.size ?: 0
@@ -96,7 +100,10 @@ fun RelatedSheet(
                 .fillMaxWidth()
                 .background(headerColor)
                 .heightIn(min = Dimens.MinTouchTarget + Spacing.Tight)
-                .padding(start = Spacing.Comfortable, end = if (onClose != null) Spacing.Hair else Spacing.Comfortable),
+                .padding(
+                    start = Spacing.Comfortable,
+                    end = if (onClose != null || (onRestart != null && !related.running)) Spacing.Hair else Spacing.Comfortable,
+                ),
         ) {
             Text(
                 text = when {
@@ -112,6 +119,15 @@ fun RelatedSheet(
                     .heightIn(min = Dimens.MinTouchTarget)
                     .windowDragArea(captionSlot?.atTop == true),
             )
+            if (onRestart != null && !related.running) {
+                IconButton(onClick = onRestart) {
+                    Icon(
+                        Icons.Filled.Refresh,
+                        contentDescription = stringResource(Res.string.related_restart),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
             onClose?.let { close ->
                 val closeLabel = stringResource(Res.string.action_close)
                 BilbyTooltip(text = closeLabel, shortcut = "Esc") {

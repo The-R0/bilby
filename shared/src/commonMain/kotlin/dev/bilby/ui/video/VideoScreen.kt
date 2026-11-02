@@ -174,6 +174,8 @@ fun VideoScreen(
     onAskRelated: (String) -> Unit,
     /** 重跑出错的那一轮找相关或追问。 */
     onRetryRelated: () -> Unit,
+    /** 「重新检索」:清掉存下的那段找相关会话,从第一轮重跑。 */
+    onRestartRelated: () -> Unit,
     /** 盘上已有的东西。缓存面板拿它把已有的那几条标出来并禁选。 */
     cached: CachedIndex = CachedIndex(),
     /** 缓存面板按下确认。清晰度与"要不要弹幕"都在面板里选,这里只负责把结果交出去。 */
@@ -790,6 +792,7 @@ fun VideoScreen(
                     },
                     onAsk = onAskRelated,
                     onRetry = onRetryRelated,
+                    onRestart = onRestartRelated,
                 )
             }
         }
