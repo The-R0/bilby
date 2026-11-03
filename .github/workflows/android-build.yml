@@ -17,6 +17,9 @@ permissions:
 jobs:
   apk:
     runs-on: ubuntu-latest
+    # secrets 不能出现在 if 里,经 job 级 env 转一道。
+    env:
+      HAS_DEBUG_KEYSTORE: ${{ secrets.DEBUG_KEYSTORE_B64 != '' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -30,7 +33,16 @@ jobs:
       - uses: gradle/actions/setup-gradle@v5
 
       # 不配 BILBY_KEYSTORE:构建脚本回落到 debug 签名,出来的 APK 可以直接装。
-      #
+      # 但 debug 签名默认是 runner 现生成的那把,每次构建都不同 —— 新包装在旧包上会报
+      # INSTALL_FAILED_UPDATE_INCOMPATIBLE。固定一把存在 secrets 里,包之间才能覆盖升级。
+      - name: Pin debug keystore
+        if: env.HAS_DEBUG_KEYSTORE == 'true'
+        env:
+          DEBUG_KEYSTORE_B64: ${{ secrets.DEBUG_KEYSTORE_B64 }}
+        run: |
+          mkdir -p ~/.android
+          echo "$DEBUG_KEYSTORE_B64" | base64 -d > ~/.android/debug.keystore
+
       # release 与 debug 各编一份,它们是**两个应用**:
       # - release 包名是 dev.bilby,与官方发布包相同 —— 装它要先卸掉原版,
       #   且是 R8 混淆过的,接近真实发版;
