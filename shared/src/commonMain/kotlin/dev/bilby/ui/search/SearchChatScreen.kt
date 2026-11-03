@@ -191,6 +191,8 @@ fun SearchChatScreen(
     onHistoryRemove: (String) -> Unit = {},
     onHistoryClear: () -> Unit = {},
     onSuggestionClick: (String) -> Unit = {},
+    /** 结果页上侧滑返回:退到着陆页,不直接退出。 */
+    onBackToLanding: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val wide = rememberBilbyWindowSize().isAtLeast(BilbyWindowSize.Expanded)
@@ -227,6 +229,7 @@ fun SearchChatScreen(
                 focusManager.clearFocus()
                 onSuggestionClick(term)
             },
+            onBackToLanding = onBackToLanding,
         )
     }
 
@@ -347,11 +350,14 @@ private fun NormalSearch(
     onHistoryClear: () -> Unit,
     suggestions: List<SearchSuggestion>,
     onSuggestionClick: (String) -> Unit,
+    onBackToLanding: () -> Unit,
 ) {
     var focused by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
     // 展开态(搜索栏有焦点)时,返回先收起,不直接离开这一页。
     BackHandler(enabled = focused) { focusManager.clearFocus() }
+    // 结果页上的返回退到着陆页,不直接退出;和上面那个互斥,聚焦时仍先收起。
+    BackHandler(enabled = state.query.isNotEmpty() && !focused) { onBackToLanding() }
 
     // 宽屏的助理是常驻侧栏,不要这个按钮(见 [AskAgentFab])。
     val askAgentFab = onAskAgent.takeIf { !wide }

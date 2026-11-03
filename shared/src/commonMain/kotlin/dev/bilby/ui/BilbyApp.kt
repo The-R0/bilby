@@ -1339,6 +1339,7 @@ private fun SearchPane(
         onHistoryRemove = vm::removeSearchHistory,
         onHistoryClear = vm::clearSearchHistory,
         onSuggestionClick = vm::searchSuggestion,
+        onBackToLanding = vm::backToLanding,
         onInputChange = vm::onInputChange,
         onSearch = vm::search,
         onAskAgent = vm::askAgent,
