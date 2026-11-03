@@ -100,9 +100,12 @@ private val ControlRowOverlap = 12.dp
  * 字幕离画面底沿多远。两档:控制条在屏上时要整体抬到它上面去,不然字幕压在进度条和
  * 那排按钮上;控制条收起后只留一点边距,贴太近会被圆角或手势条切到。
  *
- * 88:控制条最矮的形态(内嵌的一行)约 76dp 高,再留一档间距。
+ * 抬起量取实测的 [PlayerShellScope.controlBarHeight] 加一档间距 —— 一行与两行排法差着五十来
+ * dp,常量按单行写死,竖屏全屏两行时字幕就被压在进度条上。88 是兜底:控制条首次展开、高度
+ * 还没量到的那几帧别让它反而沉下去(单行内嵌约 76dp 加间距)。
  */
 private val SubtitleBottomWithControls = 88.dp
+private val SubtitleControlsGap = Spacing.Tight
 private val SubtitleBottomBare = 24.dp
 
 /**
@@ -262,7 +265,11 @@ fun BilbyPlayer(
             // 字幕原先是硬切:点一下画面,控制条缓缓升起,而字幕已经在上一帧跳到了新位置。
             // 用 spatial 那一档 —— 这是位移,不是透明度。
             val subtitleBottom by animateDpAsState(
-                targetValue = if (controlsVisible && !locked) SubtitleBottomWithControls else SubtitleBottomBare,
+                targetValue = if (controlsVisible && !locked) {
+                    maxOf(SubtitleBottomWithControls, controlBarHeight + SubtitleControlsGap)
+                } else {
+                    SubtitleBottomBare
+                },
                 animationSpec = MaterialTheme.motionScheme.fastSpatialSpec(),
                 label = "subtitle-bottom",
             )
