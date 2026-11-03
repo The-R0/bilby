@@ -342,6 +342,7 @@
     <string name="player_speed_coarse_vertical">Swipe left to lock</string>
     <string name="player_speed_coarse_vertical_right">Swipe right to lock</string>
     <string name="player_speed_release_to_lock">Release to lock</string>
+    <string name="player_speed_holding">Playing at %1$s</string>
     <string name="player_speed_locked">Locked at %1$s</string>
     <string name="player_speed_lock_action">Lock current speed</string>
 

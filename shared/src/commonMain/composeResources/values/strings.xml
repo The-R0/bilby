@@ -404,6 +404,7 @@
     <string name="player_speed_coarse_vertical">左滑锁定</string>
     <string name="player_speed_coarse_vertical_right">右滑锁定</string>
     <string name="player_speed_release_to_lock">松手锁定</string>
+    <string name="player_speed_holding">倍速播放中 %1$s</string>
     <string name="player_speed_locked">已锁定 %1$s</string>
     <string name="player_speed_lock_action">锁定当前倍速</string>
 
