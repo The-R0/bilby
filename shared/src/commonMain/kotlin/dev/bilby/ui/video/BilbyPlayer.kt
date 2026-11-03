@@ -357,13 +357,14 @@ fun BilbyPlayer(
  *
  * 两种排法,按画面大小分:
  *
- * - **窄**(单栏内嵌,以及竖屏视频的全屏):一行 ——「时间 进度条 时长 [弹幕] ⚙ ⛶」。倍速、
- *   清晰度、字幕收进 ⚙ 打开的整块设置面板。内嵌画面只有两百来 dp 高,两行控制条加上顶上的
- *   返回键,中间就放不下播放键了。
- * - **宽**(全屏,或双栏里的内嵌画面,且宽度够):进度条独占一行,下面一行是读数和几枚写着
- *   当前档位的 chip(「1.5x」「1080P」),倍速打开贴边选择器,其余各开面板中对应的一段;
- *   弹幕开关旁边的 ⚙ 只开弹幕那一段。
- *   不只看宽度:单栏横屏的内嵌画面也有四五百 dp 宽,高度却放不下两行。
+ * - **窄**(单栏内嵌):一行 ——「时间 进度条 时长 [弹幕] ⚙ ⛶」。倍速、清晰度、字幕收进 ⚙
+ *   打开的整块设置面板。内嵌画面只有两百来 dp 高,两行控制条加上顶上的返回键,中间就放不下
+ *   播放键了。
+ * - **堆叠**(全屏 —— 横竖屏皆是,以及双栏里的内嵌画面):进度条独占一行,下面一行是读数
+ *   与控件。全屏后进度条是这一屏最主要的操作,单行排法里它被挤在时间和三枚按钮中间只剩
+ *   两百来 dp,拖着费劲;独占一行后整屏宽都是它的。控件按宽度分两档:够宽(≥480)时换成
+ *   写着当前档位的 chip(「1.5x」「1080P」)加弹幕设置键;竖屏手机的宽度放不下那些,保持
+ *   紧凑的 [弹幕] ⚙ ⛶ 三键,档位照常在面板里调。
  *
  * 原先是一行按钮加一套"量一遍装不装得下、装不下就给不给档名、再装不下就分两行"的估算,
  * 窄屏上是六七个一样大的白色线框挤在右下角。现在窄的时候档位全在面板里,估算就不需要了。
@@ -430,7 +431,9 @@ private fun PlayerControlBar(
     }
 
     BoxWithConstraints(modifier = container) {
-        val wide = largePlayer && !pip && maxWidth >= Breakpoints.StackedControlBar
+        // 堆叠:全屏或双栏里占满整列的内嵌画面,进度条才值得独占一行。宽一档(≥480)再摆 chip。
+        val stacked = largePlayer && !pip
+        val wide = stacked && maxWidth >= Breakpoints.StackedControlBar
         val roomy = maxWidth >= InlineDanmakuBarMinWidth
         var composing by remember { mutableStateOf(false) }
         if (pip) {
@@ -439,7 +442,7 @@ private fun PlayerControlBar(
                 seekBar(Modifier.weight(1f))
                 TimeLabel(duration, secondary = true, modifier = Modifier.padding(end = Spacing.Tight))
             }
-        } else if (!wide) {
+        } else if (!stacked) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (composing && danmakuField != null) {
                     ControlBarDanmakuField(
@@ -490,14 +493,8 @@ private fun PlayerControlBar(
                 // 「发弹幕」键,点开之后 chip 让位、输入框铺开,同窄屏胶囊写弹幕时视图切换退场。
                 val showField = danmakuField != null && (roomy || composing)
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Row(
-                        verticalAlignment = Alignment.Bottom,
-                        modifier = Modifier.padding(start = Spacing.Tight),
-                    ) {
-                        TimeLabel(position, large = true)
-                        TimeLabel(duration, large = true, secondary = true, prefix = " / ")
-                    }
-                    if (showField) {
+                    if (composing && danmakuField != null && !wide) {
+                        // 不够宽时写弹幕:输入框顶掉读数铺整行,同上面窄排法。
                         ControlBarDanmakuField(
                             draft = danmakuField.draft,
                             onDraftChange = danmakuField.onDraftChange,
@@ -510,13 +507,38 @@ private fun PlayerControlBar(
                                 danmakuField.onComposingChange(focused)
                                 if (!focused) composing = false
                             },
-                            autoFocus = !roomy,
+                            autoFocus = true,
                             modifier = Modifier.weight(1f).padding(horizontal = Spacing.Cozy),
                         )
                     } else {
-                        Spacer(Modifier.weight(1f))
+                        Row(
+                            verticalAlignment = Alignment.Bottom,
+                            modifier = Modifier.padding(start = Spacing.Tight),
+                        ) {
+                            TimeLabel(position, large = true)
+                            TimeLabel(duration, large = true, secondary = true, prefix = " / ")
+                        }
+                        if (showField) {
+                            ControlBarDanmakuField(
+                                draft = danmakuField.draft,
+                                onDraftChange = danmakuField.onDraftChange,
+                                maxLength = danmakuField.maxLength,
+                                sending = danmakuField.sending,
+                                error = danmakuField.error,
+                                onSend = danmakuField.onSend,
+                                onFocusChange = { focused ->
+                                    onDanmakuFieldFocusChange(focused)
+                                    danmakuField.onComposingChange(focused)
+                                    if (!focused) composing = false
+                                },
+                                autoFocus = !roomy,
+                                modifier = Modifier.weight(1f).padding(horizontal = Spacing.Cozy),
+                            )
+                        } else {
+                            Spacer(Modifier.weight(1f))
+                        }
                     }
-                    if (roomy || !composing) {
+                    if (wide && (roomy || !composing)) {
                         SettingChips(
                             speed = speed,
                             // 只有一档时没什么可换,chip 不画(面板里那一段同样不画)。
@@ -535,7 +557,11 @@ private fun PlayerControlBar(
                         }
                     }
                     DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, isFullscreen)
-                    if (hasDanmakuSettings) DanmakuSettingsButton { onOpenSettings(PlayerSettingsSection.Danmaku) }
+                    if (wide) {
+                        if (hasDanmakuSettings) DanmakuSettingsButton { onOpenSettings(PlayerSettingsSection.Danmaku) }
+                    } else {
+                        PlayerSettingsButton { onOpenSettings(null) }
+                    }
                     FullscreenButton(isFullscreen, onFullscreenToggle)
                 }
             }
