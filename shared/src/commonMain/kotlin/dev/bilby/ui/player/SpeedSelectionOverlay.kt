@@ -130,6 +130,9 @@ private fun rememberSpeedHintState(
     val text = when {
         locked != null -> stringResource(Res.string.player_speed_locked, formatSpeed(locked / 100f))
         releaseToLock -> stringResource(Res.string.player_speed_release_to_lock)
+        // 长按快进不摆选档条,这句是唯一在屏的读数:实时跟着手指调出来的档走。
+        selection?.temporary == true ->
+            stringResource(Res.string.player_speed_holding, formatSpeed(selection.speed))
         !vertical && dockTop -> stringResource(Res.string.player_speed_coarse_horizontal_top)
         !vertical -> stringResource(Res.string.player_speed_coarse_horizontal)
         dockEnd -> stringResource(Res.string.player_speed_coarse_vertical_right)
@@ -243,8 +246,11 @@ internal fun SpeedSelectionOverlay(
             if (controller.active) {
                 Box(Modifier.fillMaxSize().pointerInput(controller) { detectTapGestures { controller.finish() } })
             }
+            // 长按快进(temporary)不摆选档条:快进时屏上一个控件都不画,只有中央那句倍速读数;
+            // 拖动调档与横向滑入锁定照走,非 temporary 的展开途径才需要这条 rail。
+            val railSelection = activeOrLast?.takeIf { !it.temporary }
             AnimatedVisibility(
-                visible = controller.active,
+                visible = controller.active && railSelection != null,
                 enter = (when {
                     !vertical && dockTop -> slideInVertically(spatialOffset) { -it / 2 }
                     !vertical -> slideInVertically(spatialOffset) { it / 2 }
