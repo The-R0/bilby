@@ -7,7 +7,6 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -51,12 +50,12 @@ import androidx.compose.material.icons.Icons
 import dev.bilby.ui.components.PillInputField
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.NorthWest
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.MaterialTheme
@@ -382,7 +381,12 @@ private fun NormalSearch(
         SearchHistoryPanel(history, onHistoryClick, onHistoryRemove, onHistoryClear, panelModifier)
     }
     val suggestionPanel: @Composable (Modifier) -> Unit = { panelModifier ->
-        SuggestionPanel(suggestions, onSuggestionClick, panelModifier)
+        SuggestionPanel(
+            suggestions = suggestions,
+            onClick = onSuggestionClick,
+            onFill = onInputChange,
+            modifier = panelModifier,
+        )
     }
     // 聚焦时盖在结果上的那一块:正在打字而且有补全就是补全,否则是历史。
     val typing = focused && input.isNotBlank() && suggestions.isNotEmpty()
@@ -622,6 +626,7 @@ private val AskAgentFabClearance = 88.dp
 private fun SuggestionPanel(
     suggestions: List<SearchSuggestion>,
     onClick: (String) -> Unit,
+    onFill: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val title = stringResource(Res.string.search_suggestions)
@@ -640,7 +645,7 @@ private fun SuggestionPanel(
                     .fillMaxWidth()
                     .heightIn(min = SuggestionRowHeight)
                     .clickable(role = Role.Button) { onClick(suggestion.term) }
-                    .padding(horizontal = Spacing.Comfortable),
+                    .padding(start = Spacing.Comfortable, end = Spacing.Hair),
             ) {
                 Icon(
                     Icons.Outlined.Search,
@@ -659,7 +664,16 @@ private fun SuggestionPanel(
                     style = MaterialTheme.typography.bodyLarge,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
                 )
+                IconButton(onClick = { onFill(suggestion.term) }) {
+                    Icon(
+                        imageVector = Icons.Outlined.NorthWest,
+                        contentDescription = suggestion.term,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(Dimens.IconInline),
+                    )
+                }
             }
         }
     }
@@ -758,11 +772,9 @@ private class CollapsingBar {
  * **chip 而不是一行一条。** 一行一条时五条就是一屏,上限因此只敢给五;chip 按词长排,几十个
  * 词也只占几行,要找的那个一眼扫得到。历史本身不设上限(见 SettingsStore.searchHistory)。
  *
- * **点一下直接搜,长按出菜单删这一条。** 删除从常驻的 × 收进长按:每个 chip 各带一个 ×,
- * 一半的面积是删除按钮,点偏一点就删掉了想搜的那个。
- *
- * **有「清空」,而且要确认。** 五条时逐条删就够;没有上限之后一条条长按删是折磨。清空不可
- * 撤销,所以隔一个确认框。
+ * **默认点一下直接搜;点右上角删除图标或长按任一词进入编辑态,逐条点选删除。**
+ * 常驻 × 会让每个 chip 一半面积变成删除键,平时点偏就误删;把 × 收进编辑态后,平时只管点按
+ * 搜索,需要清理时既能点选删掉单独几条,也能在编辑态里点「清空」(带二次确认)全部清掉。
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -773,7 +785,12 @@ private fun SearchHistoryPanel(
     onClear: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var editing by remember { mutableStateOf(false) }
     var confirmingClear by remember { mutableStateOf(false) }
+    LaunchedEffect(history.isEmpty()) {
+        if (history.isEmpty()) editing = false
+    }
+    BackHandler(enabled = editing) { editing = false }
     Column(modifier = modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Tight)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
@@ -782,8 +799,21 @@ private fun SearchHistoryPanel(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.weight(1f),
             )
-            TextButton(onClick = { confirmingClear = true }) {
-                Text(stringResource(Res.string.action_clear))
+            if (editing) {
+                TextButton(onClick = { confirmingClear = true }) {
+                    Text(stringResource(Res.string.action_clear))
+                }
+                TextButton(onClick = { editing = false }) {
+                    Text(stringResource(Res.string.action_done))
+                }
+            } else {
+                IconButton(onClick = { editing = true }) {
+                    Icon(
+                        imageVector = Icons.Outlined.Delete,
+                        contentDescription = stringResource(Res.string.search_history_remove),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
         FlowRow(
@@ -792,7 +822,12 @@ private fun SearchHistoryPanel(
             modifier = Modifier.padding(bottom = Spacing.Tight),
         ) {
             history.forEach { query ->
-                HistoryChip(query = query, onClick = { onClick(query) }, onRemove = { onRemove(query) })
+                HistoryChip(
+                    query = query,
+                    editing = editing,
+                    onClick = { if (editing) onRemove(query) else onClick(query) },
+                    onLongClick = { editing = true },
+                )
             }
         }
     }
@@ -804,6 +839,7 @@ private fun SearchHistoryPanel(
             confirmButton = {
                 TextButton(onClick = {
                     confirmingClear = false
+                    editing = false
                     onClear()
                 }) { Text(stringResource(Res.string.action_clear)) }
             },
@@ -817,25 +853,37 @@ private fun SearchHistoryPanel(
 }
 
 /**
- * 历史里的一个词。形状与底色取 M3 的 suggestion chip,但自己拼:material3 的 chip 只给单击,
- * 这里还要长按。菜单挂在 chip 上,从按下去的那个词旁边弹出来。
+ * 历史里的一个词。默认态点击直接搜索、长按进入编辑态;编辑态下词尾露出 ×,点击即删这一条。
  */
 @Composable
-private fun HistoryChip(query: String, onClick: () -> Unit, onRemove: () -> Unit) {
-    var menuOpen by remember { mutableStateOf(false) }
-    Box {
-        Surface(
-            shape = MaterialTheme.shapes.small,
-            color = MaterialTheme.colorScheme.surfaceContainerHighest,
+private fun HistoryChip(
+    query: String,
+    editing: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+) {
+    Surface(
+        shape = MaterialTheme.shapes.small,
+        color = MaterialTheme.colorScheme.surfaceContainerHighest,
+        modifier = Modifier
+            // 视觉 32dp,触控撑到 48dp(风格指南 §3)。
+            .minimumInteractiveComponentSize()
+            .clip(MaterialTheme.shapes.small)
+            .combinedClickable(
+                role = Role.Button,
+                onClick = onClick,
+                onLongClick = onLongClick,
+                onLongClickLabel = stringResource(Res.string.search_history_remove),
+            ),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
             modifier = Modifier
-                // 视觉 32dp,触控撑到 48dp(风格指南 §3)。
-                .minimumInteractiveComponentSize()
-                .clip(MaterialTheme.shapes.small)
-                .combinedClickable(
-                    role = Role.Button,
-                    onClick = onClick,
-                    onLongClick = { menuOpen = true },
-                    onLongClickLabel = stringResource(Res.string.search_history_remove),
+                .heightIn(min = HistoryChipHeight)
+                .padding(
+                    start = Spacing.Cozy,
+                    end = if (editing) Spacing.Tight else Spacing.Cozy,
                 ),
         ) {
             Text(
@@ -843,26 +891,23 @@ private fun HistoryChip(query: String, onClick: () -> Unit, onRemove: () -> Unit
                 style = MaterialTheme.typography.labelLarge,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier
-                    .heightIn(min = HistoryChipHeight)
-                    .wrapContentHeight()
-                    .padding(horizontal = Spacing.Cozy),
+                modifier = Modifier.weight(1f, fill = false),
             )
-        }
-        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-            DropdownMenuItem(
-                text = { Text(stringResource(Res.string.search_history_remove)) },
-                onClick = {
-                    menuOpen = false
-                    onRemove()
-                },
-            )
+            if (editing) {
+                Icon(
+                    imageVector = Icons.Outlined.Close,
+                    contentDescription = stringResource(Res.string.search_history_remove),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(HistoryChipCloseIconSize),
+                )
+            }
         }
     }
 }
 
-/** M3 chip 的容器高度。 */
+/** M3 chip 的容器高度与行尾关闭图标尺寸。 */
 private val HistoryChipHeight = 32.dp
+private val HistoryChipCloseIconSize = 16.dp
 
 /** 助理:上面是对话,下面是追问框。窄屏的助理一屏和宽屏的侧栏是同一块。 */
 @Composable
