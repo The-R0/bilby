@@ -675,8 +675,8 @@ private fun LiveControlBar(
                     error = danmakuField.error,
                     onSend = danmakuField.onSend,
                     onFocusChange = { focused ->
+                        composing = focused
                         onDanmakuFieldFocusChange(focused)
-                        if (!focused) composing = false
                     },
                     autoFocus = !roomy,
                     modifier = Modifier.weight(1f).padding(horizontal = Spacing.Cozy),

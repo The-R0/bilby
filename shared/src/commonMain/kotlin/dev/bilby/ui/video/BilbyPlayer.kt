@@ -37,7 +37,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.zIndex
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -490,18 +489,26 @@ private fun PlayerControlBar(
         } else {
             // **两行负间距叠着放。** 两者都是 48dp 的触摸区,画出来的东西却只有十几 dp 高,两块
             // 空 padding 摞在一起读起来像两组不相干的控件。叠 [ControlRowOverlap] 之后看着是一组,
-            // 两边的触摸区都还在 36dp 以上。进度条画在上层,叠掉的那一截归它。
+            // 两边的触摸区都还在 36dp 以上。按钮行在后,叠掉的那一截归按钮,避免点设置/全屏偏上时误触进度条。
             Column(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(-ControlRowOverlap),
             ) {
-                seekBar(Modifier.fillMaxWidth().zIndex(1f))
+                seekBar(Modifier.fillMaxWidth())
                 // 弹幕输入框在读数与 chip 之间,同网页端。这一行放不下它和整排 chip 时,它收成一枚
                 // 「发弹幕」键,点开之后 chip 让位、输入框铺开,同窄屏胶囊写弹幕时视图切换退场。
                 val showField = danmakuField != null && (roomy || composing)
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (composing && danmakuField != null && !wide) {
-                        // 不够宽时写弹幕:输入框顶掉读数铺整行,同上面窄排法。
+                    if (!composing || roomy) {
+                        Row(
+                            verticalAlignment = Alignment.Bottom,
+                            modifier = Modifier.padding(start = Spacing.Tight),
+                        ) {
+                            TimeLabel(position, large = true)
+                            TimeLabel(duration, large = true, secondary = true, prefix = " / ")
+                        }
+                    }
+                    if (showField) {
                         ControlBarDanmakuField(
                             draft = danmakuField.draft,
                             onDraftChange = danmakuField.onDraftChange,
@@ -510,42 +517,17 @@ private fun PlayerControlBar(
                             error = danmakuField.error,
                             onSend = danmakuField.onSend,
                             onFocusChange = { focused ->
+                                composing = focused
                                 onDanmakuFieldFocusChange(focused)
                                 danmakuField.onComposingChange(focused)
-                                if (!focused) composing = false
                             },
-                            autoFocus = true,
+                            autoFocus = !roomy,
                             modifier = Modifier.weight(1f).padding(horizontal = Spacing.Cozy),
                         )
                     } else {
-                        Row(
-                            verticalAlignment = Alignment.Bottom,
-                            modifier = Modifier.padding(start = Spacing.Tight),
-                        ) {
-                            TimeLabel(position, large = true)
-                            TimeLabel(duration, large = true, secondary = true, prefix = " / ")
-                        }
-                        if (showField) {
-                            ControlBarDanmakuField(
-                                draft = danmakuField.draft,
-                                onDraftChange = danmakuField.onDraftChange,
-                                maxLength = danmakuField.maxLength,
-                                sending = danmakuField.sending,
-                                error = danmakuField.error,
-                                onSend = danmakuField.onSend,
-                                onFocusChange = { focused ->
-                                    onDanmakuFieldFocusChange(focused)
-                                    danmakuField.onComposingChange(focused)
-                                    if (!focused) composing = false
-                                },
-                                autoFocus = !roomy,
-                                modifier = Modifier.weight(1f).padding(horizontal = Spacing.Cozy),
-                            )
-                        } else {
-                            Spacer(Modifier.weight(1f))
-                        }
+                        Spacer(Modifier.weight(1f))
                     }
-                    if (wide && (roomy || !composing)) {
+                    if (wide && !composing) {
                         SettingChips(
                             speed = speed,
                             // 只有一档时没什么可换,chip 不画(面板里那一段同样不画)。
