@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -294,7 +295,18 @@ internal fun SpeedSelectionOverlay(
             }
             SpeedSelectionHint(
                 controller = controller,
-                modifier = Modifier.align(Alignment.Center),
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .then(
+                        if (isFullscreen) {
+                            Modifier.windowInsetsPadding(
+                                WindowInsets.barsAndCutout.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
+                            )
+                        } else {
+                            Modifier
+                        },
+                    )
+                    .padding(top = Spacing.Comfortable),
             )
         }
     }

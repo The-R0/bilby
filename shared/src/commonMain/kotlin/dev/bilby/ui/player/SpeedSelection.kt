@@ -68,82 +68,28 @@ internal data class SpeedSelection(
     }
 }
 
-/** 先识别主方向，再按手指增量位移纯跟手换档，往返转向即时响应。 */
+/** 按手指沿主轴的增量位移纯跟手换档，往返转向即时响应，正交方向滑动不锁定。 */
 internal class SpeedSelectionDrag {
-    private enum class Axis { Along, Across }
-
-    private var axis: Axis? = null
     private var lastAlong = 0f
-    private var probeAlong = 0f
-    private var probeAcross = 0f
-    private var crossStartAlong = 0f
-    private var crossStartAcross = 0f
+    private var startAlong = 0f
     private var engaged = false
 
     fun move(
         selection: SpeedSelection,
         along: Float,
-        across: Float,
+        @Suppress("UNUSED_PARAMETER")
+        across: Float = 0f,
     ): SpeedSelection {
+        if (selection.locked) return selection
         val deltaAlong = along - lastAlong
         lastAlong = along
-        val localAlong = along - probeAlong
-        val localAcross = across - probeAcross
-        val alongIntent = abs(localAlong) >= SpeedSelectionIntentDp && abs(localAlong) >= abs(localAcross) * 1.15f
-        val crossIntent = abs(localAcross) >= 14f && abs(localAcross) >= abs(localAlong) * 1.25f
-
-        if (axis != Axis.Across && crossIntent) {
-            axis = Axis.Across
-            crossStartAlong = probeAlong
-            crossStartAcross = probeAcross
-        } else if (axis == Axis.Across && abs(localAlong) >= SpeedSelectionIntentDp &&
-            abs(localAlong) >= abs(localAcross) * 1.8f
-        ) {
-            reset(along, across)
-            return selection.snapped()
-        }
-
-        if (axis == Axis.Across) {
-            val cross = across - crossStartAcross
-            val clearCross = abs(cross) >= SpeedModeStepDp &&
-                abs(cross) >= abs(along - crossStartAlong) * 1.25f
-            val next = when {
-                clearCross && selection.locked && cross < 0 -> selection.snapped().copy(locked = false)
-                clearCross && !selection.locked && cross > 0 -> selection.snapped().copy(locked = true)
-                else -> null
-            }
-            if (next != null) {
-                reset(along, across)
-                return next
-            }
-            if (abs(cross) < 8f) reset(along, across)
-            else if (crossIntent) {
-                probeAlong = along
-                probeAcross = across
-            }
-            return selection
-        }
-
-        if (alongIntent) {
-            axis = Axis.Along
-            probeAlong = along
-            probeAcross = across
-        }
-        if (axis != Axis.Along || selection.locked) return selection
-
         if (!engaged) {
+            val localAlong = along - startAlong
+            if (abs(localAlong) < SpeedSelectionIntentDp) return selection
             engaged = true
             val effective = localAlong - SpeedSelectionIntentDp * sign(localAlong)
             return selection.coarseAt(selection.position + effective / SpeedDragStepDp)
         }
         return selection.coarseAt(selection.position + deltaAlong / SpeedDragStepDp)
-    }
-
-    private fun reset(along: Float, across: Float) {
-        axis = null
-        lastAlong = along
-        probeAlong = along
-        probeAcross = across
-        engaged = false
     }
 }

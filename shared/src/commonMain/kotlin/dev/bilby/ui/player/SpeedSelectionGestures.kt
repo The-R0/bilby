@@ -51,21 +51,10 @@ internal fun Modifier.speedSelectionLongPress(
                 change.consume()
                 if (!owned) return@detectDragGesturesAfterLongPress
                 displacement += amount
-                val before = controller.selection
-                val acrossPx = when {
-                    !vertical && dockTop -> -displacement.y
-                    !vertical -> displacement.y
-                    dockEnd -> displacement.x
-                    else -> -displacement.x
-                }
                 controller.move(
                     alongDp = (if (vertical) displacement.y else displacement.x) / density,
-                    acrossDp = acrossPx / density,
+                    acrossDp = 0f,
                 )
-                val after = controller.selection
-                if (after?.locked != before?.locked) {
-                    haptics.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
-                }
             }
         } finally {
             if (owned) controller.cancel()

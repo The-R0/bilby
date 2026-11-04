@@ -23,7 +23,7 @@ class SpeedSelectionTest {
     }
 
     @Test
-    fun `curved cross gesture preserves speed through lock and undo`() {
+    fun `orthogonal movement never locks and continues tracking along axis`() {
         var actual = 1.5f
         val controller = PlaybackSpeedController({ actual }, { actual = it })
         controller.open()
@@ -34,11 +34,11 @@ class SpeedSelectionTest {
         assertFalse(controller.selection!!.locked)
         assertEquals(200, controller.selection!!.value)
         controller.move(52f, 44f)
-        assertTrue(controller.selection!!.locked)
-        assertEquals(200, controller.selection!!.value)
-        controller.move(59f, 8f)
         assertFalse(controller.selection!!.locked)
         assertEquals(200, controller.selection!!.value)
+        controller.move(76f, 80f)
+        assertFalse(controller.selection!!.locked)
+        assertEquals(250, controller.selection!!.value)
         controller.finish()
     }
 
@@ -74,7 +74,7 @@ class SpeedSelectionTest {
         controller.beginDrag()
         controller.move(-36f, 0f)
         assertEquals(200, controller.selection!!.value)
-        controller.move(-36f, 36f)
+        controller.lock()
         assertTrue(controller.selection!!.locked)
         controller.finish()
         assertEquals(2f, actual, 0f)
@@ -141,27 +141,7 @@ class SpeedSelectionTest {
     }
 
     @Test
-    fun `returning from lock allows stepping and locking again`() {
-        var actual = 1f
-        val controller = PlaybackSpeedController({ actual }, { actual = it }, defaultHoldSpeed = 2f)
-        controller.open(temporary = true)
-        assertEquals(200, controller.selection!!.value)
-        controller.beginDrag()
-        controller.move(0f, 36f)
-        assertTrue(controller.selection!!.locked)
-        controller.move(0f, 0f)
-        assertFalse(controller.selection!!.locked)
-        controller.move(36f, 0f)
-        assertEquals(250, controller.selection!!.value)
-        controller.move(36f, 36f)
-        assertTrue(controller.selection!!.locked)
-        controller.finish()
-        assertEquals(2.5f, actual, 0f)
-        assertEquals(250, controller.lockedHint)
-    }
-
-    @Test
-    fun `releasing after undoing lock restores the pre-hold speed`() {
+    fun `orthogonal swipe does not lock and releasing restores the pre-hold speed`() {
         var actual = 1.37f
         val controller = PlaybackSpeedController({ actual }, { actual = it }, defaultHoldSpeed = 2f)
         controller.open(temporary = true)
@@ -169,7 +149,6 @@ class SpeedSelectionTest {
         controller.move(36f, 0f)
         controller.move(36f, 36f)
         assertEquals(2.5f, actual, 0f)
-        controller.move(36f, 0f)
         assertFalse(controller.selection!!.locked)
         controller.finish()
         assertEquals(1.37f, actual, 0f)
@@ -227,14 +206,14 @@ class SpeedSelectionTest {
     }
 
     @Test
-    fun `cancelling after sliding into lock zone rolls back instead of committing`() {
+    fun `cancelling after locking rolls back instead of committing`() {
         var actual = 1f
         val controller = PlaybackSpeedController({ actual }, { actual = it }, defaultHoldSpeed = 2f)
         controller.open(temporary = true)
         controller.beginDrag()
         controller.move(36f, 0f)
         assertEquals(250, controller.selection!!.value)
-        controller.move(36f, 36f)
+        controller.lock()
         assertTrue(controller.selection!!.locked)
         controller.cancel()
         assertEquals(1f, actual, 0f)
@@ -252,7 +231,7 @@ class SpeedSelectionTest {
         controller.beginDrag()
         controller.move(76f, 0f)
         assertEquals(300, controller.selection!!.value)
-        controller.move(76f, 36f)
+        controller.lock()
         assertTrue(controller.selection!!.locked)
         controller.cancel()
         assertEquals(2f, actual, 0f)
