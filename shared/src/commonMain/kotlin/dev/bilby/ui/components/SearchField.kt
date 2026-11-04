@@ -86,6 +86,7 @@ fun SearchField(
     releaseFocusWithKeyboard: Boolean = true,
 ) {
     val keyboard = LocalSoftwareKeyboardController.current
+    val internalFocusRequester = remember { FocusRequester() }
     // 焦点态。**必须是同一个 interactionSource 既交给 BasicTextField 又在这里读**:
     // 光标在框里而容器没反应,是这个组件没有描边、没有 label 之后唯一缺的那点反馈。
     val interactionSource = remember { MutableInteractionSource() }
@@ -155,11 +156,18 @@ fun SearchField(
                     .semantics { contentDescription = placeholder }
                     .trackEditableFocus()
                     .onFocusChanged { onFocusChange(it.isFocused) }
+                    .focusRequester(internalFocusRequester)
                     .let { if (focusRequester != null) it.focusRequester(focusRequester) else it },
             )
         }
         if (value.isNotEmpty()) {
-            IconButton(onClick = { onValueChange("") }) {
+            IconButton(
+                onClick = {
+                    onValueChange("")
+                    internalFocusRequester.requestFocus()
+                    keyboard?.show()
+                },
+            ) {
                 Icon(
                     imageVector = Icons.Filled.Close,
                     contentDescription = stringResource(Res.string.action_clear),
