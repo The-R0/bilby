@@ -227,7 +227,13 @@ fun BilbyPlayer(
         modifier = modifier,
         speedController = speedController,
         gestures = gestures,
-        topBarActions = topBarActions,
+        topBarActions = {
+            topBarActions()
+            PlayerSettingsButton {
+                settingsOnly = null
+                settingsOpen = true
+            }
+        },
         embeddedTopActions = embeddedTopActions,
         pip = pip,
         overlay = {
@@ -307,7 +313,6 @@ fun BilbyPlayer(
                 currentAudio = currentAudio,
                 isFullscreen = isFullscreen,
                 largePlayer = isFullscreen || twoPane,
-                hasDanmakuSettings = danmakuEditor != null,
                 danmakuField = controlBarDanmaku,
                 // 写弹幕时控制条不自动收起,同设置面板开着时。
                 onDanmakuFieldFocusChange = { setMenuOpen(it) },
@@ -329,6 +334,7 @@ fun BilbyPlayer(
             )
         },
         panel = {
+            if (settingsOpen) setMenuOpen(true)
             val close = {
                 settingsOpen = false
                 setMenuOpen(false)
@@ -391,8 +397,6 @@ private fun PlayerControlBar(
     isFullscreen: Boolean,
     /** 全屏,或双栏里那块占满整列高度的内嵌画面。只有这时才考虑宽排法。 */
     largePlayer: Boolean,
-    /** 有没有弹幕设置可调。没有时宽排法不画那枚弹幕设置键。 */
-    hasDanmakuSettings: Boolean,
     danmakuField: ControlBarDanmaku?,
     onDanmakuFieldFocusChange: (Boolean) -> Unit,
     onSeekStart: () -> Unit,
@@ -508,36 +512,46 @@ private fun PlayerControlBar(
                             TimeLabel(duration, large = true, secondary = true, prefix = " / ")
                         }
                     }
-                    if (showField) {
-                        ControlBarDanmakuField(
-                            draft = danmakuField.draft,
-                            onDraftChange = danmakuField.onDraftChange,
-                            maxLength = danmakuField.maxLength,
-                            sending = danmakuField.sending,
-                            error = danmakuField.error,
-                            onSend = danmakuField.onSend,
-                            onFocusChange = { focused ->
-                                composing = focused
-                                onDanmakuFieldFocusChange(focused)
-                                danmakuField.onComposingChange(focused)
-                            },
-                            autoFocus = !roomy,
-                            modifier = Modifier.weight(1f).padding(horizontal = Spacing.Cozy),
-                        )
-                    } else {
-                        Spacer(Modifier.weight(1f))
-                    }
-                    if (wide && !composing) {
-                        SettingChips(
-                            speed = speed,
-                            // 只有一档时没什么可换,chip 不画(面板里那一段同样不画)。
-                            qualityLabel = qualities.takeIf { it.size > 1 }
-                                ?.firstOrNull { it.quality == currentQuality }?.label,
-                            audioLabel = currentAudio.takeIf { audioOptions.size > 1 }?.let { audioQualityLabel(it) },
-                            subtitleLabel = subtitleTracks.firstOrNull { it.lan == currentSubtitleLan }?.displayName,
-                            hasSubtitles = subtitleTracks.isNotEmpty(),
-                            onOpenSection = onOpenSettings,
-                        )
+                    // 中间段(弹幕输入框 + 档位 chip)装进 weight(1f) 容器,保证右侧的弹幕开关、
+                    // 设置按钮、全屏按钮由外层 Row 优先测量,任何字号/屏幕宽度下都不会被挤出屏幕。
+                    BoxWithConstraints(modifier = Modifier.weight(1f)) {
+                        val showChips = wide && !composing && maxWidth >= if (showField) 420.dp else 240.dp
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            if (showField) {
+                                ControlBarDanmakuField(
+                                    draft = danmakuField.draft,
+                                    onDraftChange = danmakuField.onDraftChange,
+                                    maxLength = danmakuField.maxLength,
+                                    sending = danmakuField.sending,
+                                    error = danmakuField.error,
+                                    onSend = danmakuField.onSend,
+                                    onFocusChange = { focused ->
+                                        composing = focused
+                                        onDanmakuFieldFocusChange(focused)
+                                        danmakuField.onComposingChange(focused)
+                                    },
+                                    autoFocus = !roomy,
+                                    modifier = Modifier.weight(1f).padding(horizontal = Spacing.Cozy),
+                                )
+                            } else {
+                                Spacer(Modifier.weight(1f))
+                            }
+                            if (showChips) {
+                                SettingChips(
+                                    speed = speed,
+                                    // 只有一档时没什么可换,chip 不画(面板里那一段同样不画)。
+                                    qualityLabel = qualities.takeIf { it.size > 1 }
+                                        ?.firstOrNull { it.quality == currentQuality }?.label,
+                                    audioLabel = currentAudio.takeIf { audioOptions.size > 1 }?.let { audioQualityLabel(it) },
+                                    subtitleLabel = subtitleTracks.firstOrNull { it.lan == currentSubtitleLan }?.displayName,
+                                    hasSubtitles = subtitleTracks.isNotEmpty(),
+                                    onOpenSection = onOpenSettings,
+                                )
+                            }
+                        }
                     }
                     if (danmakuField != null && !showField) {
                         val label = stringResource(Res.string.danmaku_send)
@@ -546,11 +560,7 @@ private fun PlayerControlBar(
                         }
                     }
                     DanmakuButton(danmakuEnabled, onDanmakuEnabledChange, isFullscreen)
-                    if (wide) {
-                        if (hasDanmakuSettings) DanmakuSettingsButton { onOpenSettings(PlayerSettingsSection.Danmaku) }
-                    } else {
-                        PlayerSettingsButton { onOpenSettings(null) }
-                    }
+                    PlayerSettingsButton { onOpenSettings(null) }
                     FullscreenButton(isFullscreen, onFullscreenToggle)
                 }
             }
