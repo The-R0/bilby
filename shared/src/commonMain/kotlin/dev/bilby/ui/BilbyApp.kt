@@ -108,6 +108,7 @@ import dev.bilby.stringResource
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.bilby.data.AppearancePrefs
+import dev.bilby.data.StartTab
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
@@ -1115,8 +1116,20 @@ private fun RootTabs(
     /** 搜索框里的编号或链接直接打开的那一页,可以是任何一种目的地。 */
     onOpen: (NavKey) -> Unit,
 ) {
-    // 启动落在搜索页:它是通往全部内容的那个输入口(着陆页见 SearchChatScreen)。
+    val persistedStartTab by container.settings.startTab.collectAsStateWithLifecycle(initialValue = null)
     var selected by rememberSaveable { mutableStateOf(RootTab.Search) }
+    var appliedStartTab by rememberSaveable { mutableStateOf<StartTab?>(null) }
+    LaunchedEffect(persistedStartTab) {
+        val tab = persistedStartTab ?: return@LaunchedEffect
+        if (appliedStartTab != tab) {
+            appliedStartTab = tab
+            selected = when (tab) {
+                StartTab.Feed -> RootTab.Feed
+                StartTab.Search -> RootTab.Search
+                StartTab.Profile -> RootTab.Profile
+            }
+        }
+    }
     val windowSize = rememberBilbyWindowSize()
 
     // 重按当前 tab 回到这一页的起点,navigation-bar.md 的明文要求。
@@ -1791,6 +1804,7 @@ private fun SettingsPageRoute(
             onModeChange = vm::setThemeMode,
             onPureBlackChange = vm::setPureBlack,
             onPaletteChange = vm::setThemePalette,
+            onStartTabChange = vm::setStartTab,
             onLanguageChange = system::applyLanguage,
             onBack = onBack,
         )
