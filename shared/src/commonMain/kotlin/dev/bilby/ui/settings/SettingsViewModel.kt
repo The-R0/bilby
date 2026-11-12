@@ -50,8 +50,9 @@ data class SettingsUiState(
     val sponsorBlock: SponsorBlockPrefs = SponsorBlockPrefs(),
     /** 本机真有硬解器的编码,决定编解码那一节列出哪几项。 */
     val hardwareCodecIds: Set<Int> = emptySet(),
-    val doubleTapSeek: Boolean = true,
+    val doubleTapSeek: Boolean = false,
     val longPressSpeed: Boolean = true,
+    val longPressSpeedDial: Boolean = false,
     val defaultHoldSpeed: Float = SettingsStore.DEFAULT_HOLD_SPEED,
     val swipeSeek: Boolean = true,
     val swipeBrightnessVolume: Boolean = true,
@@ -186,6 +187,7 @@ class SettingsViewModel(
                         playerPickUpdatesDefault = prefs.playerPickUpdatesDefault,
                         doubleTapSeek = prefs.doubleTapSeek,
                         longPressSpeed = prefs.longPressSpeed,
+                        longPressSpeedDial = prefs.longPressSpeedDial,
                         defaultHoldSpeed = prefs.defaultHoldSpeed,
                         swipeSeek = prefs.swipeSeek,
                         swipeBrightnessVolume = prefs.swipeBrightnessVolume,
@@ -313,6 +315,11 @@ class SettingsViewModel(
     fun setLongPressSpeed(value: Boolean) {
         _state.update { it.copy(longPressSpeed = value) }
         persist { settings.saveLongPressSpeed(value) }
+    }
+
+    fun setLongPressSpeedDial(value: Boolean) {
+        _state.update { it.copy(longPressSpeedDial = value) }
+        persist { settings.saveLongPressSpeedDial(value) }
     }
 
     fun setDefaultHoldSpeed(value: Float) {

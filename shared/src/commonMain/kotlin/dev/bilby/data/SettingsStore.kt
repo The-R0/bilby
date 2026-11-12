@@ -145,8 +145,9 @@ class SettingsStore(private val store: DataStore<Preferences>) {
             defaultLiveQualityWifi = p[KEY_DEFAULT_LIVE_QUALITY] ?: DEFAULT_LIVE_QUALITY,
             defaultLiveQualityMetered = p[KEY_DEFAULT_LIVE_QUALITY_METERED] ?: DEFAULT_LIVE_QUALITY_METERED,
             playerPickUpdatesDefault = p[KEY_PLAYER_PICK_UPDATES_DEFAULT] ?: false,
-            doubleTapSeek = p[KEY_DOUBLE_TAP_SEEK] ?: true,
+            doubleTapSeek = p[KEY_DOUBLE_TAP_SEEK] ?: false,
             longPressSpeed = p[KEY_LONG_PRESS_SPEED] ?: true,
+            longPressSpeedDial = p[KEY_LONG_PRESS_SPEED_DIAL] ?: false,
             defaultHoldSpeed = (p[KEY_DEFAULT_HOLD_SPEED] ?: p[KEY_LEGACY_HOLD_SPEED] ?: DEFAULT_HOLD_SPEED)
                 .takeIf { it in HOLD_SPEED_OPTIONS } ?: DEFAULT_HOLD_SPEED,
             swipeSeek = p[KEY_SWIPE_SEEK] ?: true,
@@ -177,6 +178,10 @@ class SettingsStore(private val store: DataStore<Preferences>) {
 
     suspend fun saveLongPressSpeed(enabled: Boolean) {
         store.edit { p -> p[KEY_LONG_PRESS_SPEED] = enabled }
+    }
+
+    suspend fun saveLongPressSpeedDial(enabled: Boolean) {
+        store.edit { p -> p[KEY_LONG_PRESS_SPEED_DIAL] = enabled }
     }
 
     suspend fun saveDefaultHoldSpeed(speed: Float) {
@@ -547,6 +552,7 @@ class SettingsStore(private val store: DataStore<Preferences>) {
 
         private val KEY_DOUBLE_TAP_SEEK = booleanPreferencesKey("player_double_tap_seek")
         private val KEY_LONG_PRESS_SPEED = booleanPreferencesKey("player_long_press_speed")
+        private val KEY_LONG_PRESS_SPEED_DIAL = booleanPreferencesKey("player_long_press_speed_dial")
         // 沿用 v0.18.1 已发布的键名,升级时不丢用户已选的默认长按倍速。
         private val KEY_DEFAULT_HOLD_SPEED = floatPreferencesKey("player_fast_forward_speed")
         private val KEY_LEGACY_HOLD_SPEED = floatPreferencesKey("player_default_hold_speed")
@@ -741,8 +747,9 @@ data class PlayerPrefs(
      * 一个「临时播放配置」开关关掉它;这里反过来,默认只管这一次。
      */
     val playerPickUpdatesDefault: Boolean = false,
-    val doubleTapSeek: Boolean = true,
+    val doubleTapSeek: Boolean = false,
     val longPressSpeed: Boolean = true,
+    val longPressSpeedDial: Boolean = false,
     val defaultHoldSpeed: Float = SettingsStore.DEFAULT_HOLD_SPEED,
     val swipeSeek: Boolean = true,
     val swipeBrightnessVolume: Boolean = true,

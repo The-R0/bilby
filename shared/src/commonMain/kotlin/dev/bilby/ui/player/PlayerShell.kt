@@ -126,6 +126,8 @@ data class PlayerGestureOptions(
     val brightnessAndVolume: Boolean = true,
     /** 长按选择临时倍速。 */
     val fastForward: Boolean = true,
+    /** 长按时展开倍速选档条并允许滑动切换或锁定倍速;关闭后仅按默认倍速临时加速并在画面顶部显示提示。 */
+    val fastForwardDial: Boolean = true,
 )
 
 /**
@@ -794,13 +796,8 @@ fun PlayerShell(
                             }
                             keepAwake()
                         },
-                        // 双击按落点分四段:两侧各四分之一是 ±10 秒,中间仍是播放/暂停,
-                        // 对齐 PiliPlus 的左右边缘手势区域。
-                        //
-                        // 中间保留下来是因为双击暂停本来就在,直接换掉等于拿走一个已有的常用
-                        // 操作;而三分法是 YouTube 立起来的惯例,两侧那两块也正是横屏握持时
-                        // 拇指自然落到的位置。关掉 seek 的场景(直播)下四段退化成整屏播放/暂停。
-                        onDoubleTap = double@{ offset ->
+                        // 触屏整屏双击播放/暂停;鼠标窗口内双击进退全屏,小窗里双击回窗口。
+                        onDoubleTap = double@{
                             // 窗口里双击进全屏,小窗里双击回窗口:同一个手势,放大一档。
                             if (pipWindow != null) {
                                 pipWindow.exit()
@@ -810,21 +807,8 @@ fun PlayerShell(
                                 onFullscreenChange(!isFullscreen)
                                 return@double
                             }
-                            val quarter = size.width / 4f
-                            when {
-                                gestures.seek && gestures.doubleTapSeek && offset.x < quarter ->
-                                    nudgeSeek(player, -DOUBLE_TAP_SEEK_MILLIS)
-                                        .also { seekNudgeMillis = accumulateNudge(seekNudgeMillis, -DOUBLE_TAP_SEEK_MILLIS) }
-
-                                gestures.seek && gestures.doubleTapSeek && offset.x > size.width - quarter ->
-                                    nudgeSeek(player, DOUBLE_TAP_SEEK_MILLIS)
-                                        .also { seekNudgeMillis = accumulateNudge(seekNudgeMillis, DOUBLE_TAP_SEEK_MILLIS) }
-
-                                else -> {
-                                    togglePlayPause()
-                                    playToggleFlash++
-                                }
-                            }
+                            togglePlayPause()
+                            playToggleFlash++
                             keepAwake()
                         },
                     )
@@ -939,7 +923,8 @@ fun PlayerShell(
                 .speedSelectionLongPress(
                     speedController,
                     enabled = gestures.fastForward && !locked && !pip,
-                    forceHorizontalBelow = !showSpeedOverlay,
+                    dialEnabled = gestures.fastForwardDial,
+                    forceHorizontalBelow = !showSpeedOverlay && gestures.fastForwardDial,
                     onStart = {
                         controlsVisible = false
                         gesture = null
@@ -1256,10 +1241,11 @@ fun PlayerShell(
             }
         }
 
-        if (showSpeedOverlay && speedController != null && !pip) {
+        if ((showSpeedOverlay || !gestures.fastForwardDial) && speedController != null && !pip) {
             SpeedSelectionOverlay(
                 controller = speedController,
                 isFullscreen = isFullscreen,
+                showDial = gestures.fastForwardDial,
                 modifier = Modifier.matchParentSize(),
             )
         }

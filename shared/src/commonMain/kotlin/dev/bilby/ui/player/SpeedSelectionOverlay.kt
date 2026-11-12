@@ -119,6 +119,7 @@ private data class SpeedHintState(
 private fun rememberSpeedHintState(
     controller: PlaybackSpeedController,
     forceHorizontalBelow: Boolean,
+    showDial: Boolean = true,
 ): SpeedHintState {
     val selection = controller.selection
     val window = LocalWindowInfo.current.containerSize
@@ -129,10 +130,8 @@ private fun rememberSpeedHintState(
     val dockTop = !vertical && !forceHorizontalBelow && selection?.dockTop == true
     val text = when {
         locked != null -> stringResource(Res.string.player_speed_locked, formatSpeed(locked / 100f))
+        !showDial -> formatSpeed(selection?.speed ?: controller.speed)
         releaseToLock -> stringResource(Res.string.player_speed_release_to_lock)
-        // 长按快进不摆选档条,这句是唯一在屏的读数:实时跟着手指调出来的档走。
-        selection?.temporary == true ->
-            stringResource(Res.string.player_speed_holding, formatSpeed(selection.speed))
         !vertical && dockTop -> stringResource(Res.string.player_speed_coarse_horizontal_top)
         !vertical -> stringResource(Res.string.player_speed_coarse_horizontal)
         dockEnd -> stringResource(Res.string.player_speed_coarse_vertical_right)
@@ -188,6 +187,7 @@ private fun SpeedHintCapsule(
 internal fun SpeedSelectionOverlay(
     controller: PlaybackSpeedController,
     isFullscreen: Boolean = false,
+    showDial: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     var shownSelection by remember { mutableStateOf<SpeedSelection?>(null) }
@@ -203,10 +203,10 @@ internal fun SpeedSelectionOverlay(
     val activeOrLast = controller.selection ?: shownSelection
     val dockEnd = vertical && activeOrLast?.dockEnd == true
     val dockTop = !vertical && activeOrLast?.dockTop == true
-    val hintState = rememberSpeedHintState(controller, forceHorizontalBelow = false)
+    val hintState = rememberSpeedHintState(controller, forceHorizontalBelow = false, showDial = showDial)
     val focus = remember { FocusRequester() }
-    BackHandler(enabled = controller.active) { controller.cancel() }
-    LaunchedEffect(controller.active) { if (controller.active) focus.requestFocus() }
+    BackHandler(enabled = controller.active && showDial) { controller.cancel() }
+    LaunchedEffect(controller.active, showDial) { if (controller.active && showDial) focus.requestFocus() }
     PlayerTheme {
         val motion = MaterialTheme.motionScheme
         val spatialOffset = motion.fastSpatialSpec<IntOffset>()
@@ -214,7 +214,7 @@ internal fun SpeedSelectionOverlay(
         Box(
             modifier.fillMaxSize()
                 .onKeyEvent { event ->
-                    if (event.type != KeyEventType.KeyDown || !controller.active) return@onKeyEvent false
+                    if (event.type != KeyEventType.KeyDown || !controller.active || !showDial) return@onKeyEvent false
                     when (event.key) {
                         Key.Escape -> controller.cancel()
                         Key.Enter -> { controller.lock(); controller.finish() }
@@ -241,16 +241,13 @@ internal fun SpeedSelectionOverlay(
                         else -> return@onKeyEvent false
                     }
                     true
-                }.focusRequester(focus).focusable(),
+                }.then(if (showDial) Modifier.focusRequester(focus).focusable() else Modifier),
         ) {
-            if (controller.active) {
+            if (controller.active && showDial) {
                 Box(Modifier.fillMaxSize().pointerInput(controller) { detectTapGestures { controller.finish() } })
             }
-            // 长按快进(temporary)不摆选档条:快进时屏上一个控件都不画,只有中央那句倍速读数;
-            // 拖动调档与横向滑入锁定照走,非 temporary 的展开途径才需要这条 rail。
-            val railSelection = activeOrLast?.takeIf { !it.temporary }
             AnimatedVisibility(
-                visible = controller.active && railSelection != null,
+                visible = controller.active && showDial,
                 enter = (when {
                     !vertical && dockTop -> slideInVertically(spatialOffset) { -it / 2 }
                     !vertical -> slideInVertically(spatialOffset) { it / 2 }
@@ -314,7 +311,7 @@ internal fun SpeedSelectionOverlay(
                     )
                 }
             }
-            val hintAtBottom = !vertical && dockTop
+            val hintAtBottom = showDial && !vertical && dockTop
             val hintInsetSides = WindowInsetsSides.Horizontal +
                 if (hintAtBottom) WindowInsetsSides.Bottom else WindowInsetsSides.Top
             AnimatedVisibility(

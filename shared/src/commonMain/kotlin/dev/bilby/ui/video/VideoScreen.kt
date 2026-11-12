@@ -1325,10 +1325,12 @@ fun VideoScreen(
                             .background(MaterialTheme.colorScheme.surface)
                             .windowInsetsPadding(WindowInsets.horizontalCutout),
                     )
-                    BelowVideoSpeedOverlay(
-                        controller = speedController,
-                        modifier = Modifier.fillMaxSize(),
-                    )
+                    if (gestures.fastForwardDial) {
+                        BelowVideoSpeedOverlay(
+                            controller = speedController,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
                 }
             }
         }
