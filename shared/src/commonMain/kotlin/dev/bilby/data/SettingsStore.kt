@@ -67,6 +67,15 @@ class SettingsStore(private val store: DataStore<Preferences>) {
         )
     }
 
+    /** 连续使用 60 分钟后的休息提醒开关。默认开启。 */
+    val restReminderEnabled: Flow<Boolean> = store.data.map { p ->
+        p[KEY_REST_REMINDER_ENABLED] ?: true
+    }
+
+    suspend fun saveRestReminderEnabled(enabled: Boolean) {
+        store.edit { p -> p[KEY_REST_REMINDER_ENABLED] = enabled }
+    }
+
     suspend fun savePlaybackPrefs(value: PlaybackPrefs) {
         store.edit { p ->
             p[KEY_END_MODE] = value.endMode.key
@@ -789,6 +798,7 @@ class SettingsStore(private val store: DataStore<Preferences>) {
         private val KEY_PBP_OUTRO_COMPLETION = booleanPreferencesKey("player_pbp_outro_completion")
         private val KEY_PLAYER_LAYOUT_JSON = stringPreferencesKey("player_layout_json")
         private val KEY_NAVIGATION_PREFS_JSON = stringPreferencesKey("navigation_prefs_json")
+        private val KEY_REST_REMINDER_ENABLED = booleanPreferencesKey("rest_reminder_enabled")
 
         const val DEFAULT_HOLD_SPEED = 2.5f
         val HOLD_SPEED_OPTIONS = listOf(1.5f, 2f, 2.5f, 3f, 3.5f)

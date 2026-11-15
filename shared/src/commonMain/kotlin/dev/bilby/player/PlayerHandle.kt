@@ -192,6 +192,9 @@ interface PlaybackHost {
     /** 前台没了。放不放下去由服务按当前装的东西决定。 */
     fun pauseForAppBackground()
 
+    /** 若此刻正在播放(含加载起播),立刻暂停;未起播时为空操作。 */
+    fun pauseIfPlaying() {}
+
     /** 导航栈上还在的视频页帧,其余帧的快照可以丢了。 */
     fun retainFrames(ids: Set<String>)
 

@@ -281,6 +281,7 @@ class DesktopPlaybackHost(
     // 桌面窗口最小化不暂停,没有"后台"这回事,这两个开关无事可做。
     override fun setBackgroundPlaybackAllowed(allowed: Boolean) = Unit
     override fun pauseForAppBackground() = Unit
+    override fun pauseIfPlaying() = setPlayWhenReady(false)
 
     override fun retainFrames(ids: Set<String>) {
         frames.keys.retainAll(ids)

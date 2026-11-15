@@ -587,7 +587,7 @@
     <string name="settings_sponsorblock_categories">跳过哪些段落</string>
     <string name="settings_agent_config">服务端配置</string>
     <!-- 设置首页摘要。播放一行只在自动跳过开启时附上这一句,见 SettingsScreen 的 playbackSummary。 -->
-    <string name="settings_playback_summary">画质、跳过片段与离线缓存</string>
+    <string name="settings_playback_summary">播放、画质、跳过片段与离线缓存</string>
     <string name="settings_privacy_summary">观看历史与黑名单</string>
     <string name="settings_version">版本</string>
     <!-- 手动更新。副标题即状态,见 SettingsScreen 的 UpdateRow。 -->
@@ -737,6 +737,12 @@
     <string name="settings_auto_next_subtitle">一条播完后接着放队列里的下一条。关闭后播完即停，手动切换不受影响</string>
     <string name="settings_pbp_outro_completion">按热度判定完播</string>
     <string name="settings_pbp_outro_completion_subtitle">进入片尾低热度段落时即视为已看完</string>
+    <string name="settings_rest_reminder">连续使用休息提醒</string>
+    <string name="settings_rest_reminder_subtitle">连续使用满 60 分钟时提示休息并可暂停播放</string>
+    <string name="rest_reminder_title">已连续使用 %1$d 分钟</string>
+    <string name="rest_reminder_message">建议暂停播放，起身活动并远眺放松眼睛。</string>
+    <string name="rest_reminder_take_break">休息一下</string>
+    <string name="rest_reminder_snooze">15 分钟后提醒</string>
     <string name="player_vote_tag">投票</string>
     <string name="player_vote_count">%1$s 人</string>
     <string name="player_vote_close">收起投票</string>

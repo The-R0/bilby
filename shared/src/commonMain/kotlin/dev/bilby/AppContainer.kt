@@ -99,6 +99,9 @@ class AppContainer(
 
     val settings: SettingsStore by lazy { SettingsStore(preferencesStore(platform.preferencesDir, "bilby")) }
 
+    /** 连续使用休息提醒计时器。放在容器层以跨越界面重组与语言切换。 */
+    val usageRestTracker: UsageRestTracker by lazy { UsageRestTracker() }
+
     /** 当前登录账号的 mid,来自登录凭据里的 DedeUserID;没登录时是 0。 */
     suspend fun myMid(): Long = settings.credentials.first().dedeUserId.toLongOrNull() ?: 0L
 

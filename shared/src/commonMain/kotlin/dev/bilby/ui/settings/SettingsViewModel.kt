@@ -83,6 +83,8 @@ data class SettingsUiState(
     val endMode: PlayEndMode = PlayEndMode.Continue,
     /** 见 [dev.bilby.data.PlayerPrefs.pbpOutroCompletion]。 */
     val pbpOutroCompletion: Boolean = true,
+    /** 连续使用 60 分钟后的休息提醒开关。 */
+    val restReminderEnabled: Boolean = true,
     /** 排除的 UP 主,名字已经带上。为空时那一行不显示 —— 没排除过的人不需要看见这个概念。 */
     val excludedFeedUps: List<ExcludedUp> = emptyList(),
     /** 直播间要不要去 danmakus.com 补本场早前的醒目留言。见 SettingsStore.danmakusArchiveEnabled。 */
@@ -282,6 +284,11 @@ class SettingsViewModel(
             settings.playbackPrefs.collect { prefs -> _state.update { it.copy(endMode = prefs.endMode) } }
         }
         viewModelScope.launch {
+            settings.restReminderEnabled.collect { enabled ->
+                _state.update { it.copy(restReminderEnabled = enabled) }
+            }
+        }
+        viewModelScope.launch {
             settings.appearancePrefs.collect { prefs -> _state.update { it.copy(appearance = prefs) } }
         }
         viewModelScope.launch {
@@ -459,6 +466,11 @@ class SettingsViewModel(
 
     fun resetNavigationPrefs() {
         saveNavigationPrefs(NavigationPrefs.Default)
+    }
+
+    fun setRestReminderEnabled(value: Boolean) {
+        _state.update { it.copy(restReminderEnabled = value) }
+        persist { settings.saveRestReminderEnabled(value) }
     }
 
     fun setThemeMode(mode: ThemeMode) {

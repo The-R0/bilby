@@ -97,6 +97,7 @@ import androidx.compose.material.icons.outlined.Subscriptions
 import androidx.compose.material.icons.outlined.VideoLibrary
 import androidx.compose.material.icons.outlined.WatchLater
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FabPosition
@@ -153,7 +154,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import dev.bilby.stringResource
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import dev.bilby.data.AppearancePrefs
 import dev.bilby.data.FeedUpStripPosition
 import dev.bilby.data.NavigationPrefs
@@ -318,8 +322,12 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material.icons.outlined.HourglassEmpty
 import androidx.compose.material.icons.outlined.LinkOff
 import androidx.compose.material.icons.outlined.DoneAll
+import dev.bilby.UsageRestTracker
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
@@ -403,6 +411,7 @@ fun BilbyRoot(
                     predictiveBack = appearance.predictiveBack,
                 )
             }
+            RestReminderHost(container)
             SnackbarHost(
                 hostState = snackbarHostState,
                 modifier = Modifier
@@ -424,6 +433,55 @@ private fun StartupUpdateHost(container: AppContainer) {
     // 不做应用内更新的平台上不检查:查到了也只能摆一个按不下去的按钮。
     val updater = container.platform.updater ?: return
     StartupUpdatePrompt(updater, container.settings, container.persistScope)
+}
+
+@Composable
+private fun RestReminderHost(container: AppContainer) {
+    val enabledSetting by container.settings.restReminderEnabled.collectAsStateWithLifecycle(initialValue = null)
+    val tracker = container.usageRestTracker
+    val restState by tracker.state.collectAsStateWithLifecycle()
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    LaunchedEffect(enabledSetting, lifecycleOwner) {
+        val enabled = enabledSetting ?: return@LaunchedEffect
+        tracker.setEnabled(enabled)
+        if (!enabled) return@LaunchedEffect
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            tracker.onForegroundEntered()
+            try {
+                while (isActive) {
+                    tracker.tick()
+                    val waitMillis = tracker.millisUntilNextTrigger()
+                        .coerceIn(500L, UsageRestTracker.DEFAULT_POLL_INTERVAL_MILLIS)
+                    delay(waitMillis)
+                }
+            } finally {
+                tracker.onBackgroundEntered()
+            }
+        }
+    }
+
+    if (enabledSetting == true && restState.reminderVisible) {
+        AlertDialog(
+            onDismissRequest = { tracker.snooze() },
+            icon = { Icon(Icons.Outlined.HourglassEmpty, contentDescription = null) },
+            title = { Text(stringResource(Res.string.rest_reminder_title, restState.continuousMinutes)) },
+            text = { Text(stringResource(Res.string.rest_reminder_message)) },
+            confirmButton = {
+                Button(onClick = {
+                    container.platform.playback.pauseIfPlaying()
+                    tracker.takeBreak()
+                }) {
+                    Text(stringResource(Res.string.rest_reminder_take_break))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { tracker.snooze() }) {
+                    Text(stringResource(Res.string.rest_reminder_snooze))
+                }
+            },
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3AdaptiveApi::class)
@@ -3297,6 +3355,7 @@ private fun SettingsPageRoute(
             onCodecChange = vm::setCodec,
             onEndModeChange = vm::setEndMode,
             onPbpOutroCompletionChange = vm::setPbpOutroCompletion,
+            onRestReminderEnabledChange = vm::setRestReminderEnabled,
             onWifiAudioChange = { vm.setDefaultAudio(it, metered = false) },
             onMeteredAudioChange = { vm.setDefaultAudio(it, metered = true) },
             onWifiLiveQualityChange = { vm.setDefaultLiveQuality(it, metered = false) },

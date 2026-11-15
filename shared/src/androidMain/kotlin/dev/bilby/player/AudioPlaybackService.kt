@@ -424,6 +424,10 @@ class AudioPlaybackService : MediaSessionService() {
         if (!backgroundPlaybackAllowed && player.playWhenReady) player.pause()
     }
 
+    private fun pauseIfPlaying() {
+        if (player.playWhenReady) player.pause()
+    }
+
     override fun onDestroy() {
         // 本地副本的位置先落盘。这里曾经只有下面那句定格上报:断网时它报不出去,而本地进度只在
         // 暂停、换条时写,服务就这样停掉的话,下次打开退回上一次暂停的地方。写盘跑在
@@ -2816,6 +2820,11 @@ class AudioPlaybackService : MediaSessionService() {
          */
         fun pauseForAppBackground() {
             runningService?.pauseForAppBackground()
+        }
+
+        /** 若当前服务正处于起播/播放状态则暂停,否则不主动拉起服务。 */
+        fun pauseIfPlaying() {
+            runningService?.pauseIfPlaying()
         }
 
         /**

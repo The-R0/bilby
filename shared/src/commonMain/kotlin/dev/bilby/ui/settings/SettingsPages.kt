@@ -308,6 +308,7 @@ fun PlaybackSettingsPage(
     onCodecChange: (CodecPreference) -> Unit,
     onEndModeChange: (PlayEndMode) -> Unit,
     onPbpOutroCompletionChange: (Boolean) -> Unit = {},
+    onRestReminderEnabledChange: (Boolean) -> Unit = {},
     onWifiAudioChange: (Int) -> Unit,
     onMeteredAudioChange: (Int) -> Unit,
     onWifiLiveQualityChange: (Int) -> Unit = {},
@@ -360,6 +361,16 @@ fun PlaybackSettingsPage(
                     subtitle = stringResource(Res.string.settings_pbp_outro_completion_subtitle),
                     checked = state.pbpOutroCompletion,
                     onCheckedChange = onPbpOutroCompletionChange,
+                )
+            }
+            row { position ->
+                ToggleSettingRow(
+                    position = position,
+                    icon = Icons.Outlined.HourglassEmpty,
+                    title = stringResource(Res.string.settings_rest_reminder),
+                    subtitle = stringResource(Res.string.settings_rest_reminder_subtitle),
+                    checked = state.restReminderEnabled,
+                    onCheckedChange = onRestReminderEnabledChange,
                 )
             }
         }

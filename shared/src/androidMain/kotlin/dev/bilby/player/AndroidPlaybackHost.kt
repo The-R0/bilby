@@ -27,6 +27,8 @@ class AndroidPlaybackHost(context: Context) : PlaybackHost {
 
     override fun pauseForAppBackground() = AudioPlaybackService.pauseForAppBackground()
 
+    override fun pauseIfPlaying() = AudioPlaybackService.pauseIfPlaying()
+
     override fun retainFrames(ids: Set<String>) = AudioPlaybackService.retainFrames(ids)
 
     override fun stop() = AudioPlaybackService.stop(appContext)
