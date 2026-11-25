@@ -163,8 +163,8 @@ data class PlayerGestureOptions(
     val seek: Boolean = true,
     /** 画面横划调整进度。关闭它不影响进度条与键盘左右方向键。 */
     val swipeSeek: Boolean = true,
-    /** 两侧双击进退。关闭后整屏双击播放/暂停,不影响横划进度。 */
-    val doubleTapSeek: Boolean = true,
+    /** 两侧双击进退。个人版默认关闭，触控整屏双击播放/暂停。 */
+    val doubleTapSeek: Boolean = false,
     /** 两侧双击单次步进秒数（1..300）。 */
     val doubleTapSeekSeconds: Int = DEFAULT_DOUBLE_TAP_SEEK_SECONDS,
     /** 纵向滑动手势总开关（默认左亮右音，可自定义为亮度/音量/切换剧集/无）。 */
@@ -1033,13 +1033,8 @@ fun PlayerShell(
                             }
                             keepAwake()
                         },
-                        // 双击按落点分四段:两侧各四分之一是 ±10 秒,中间仍是播放/暂停,
-                        // 对齐 PiliPlus 的左右边缘手势区域。
-                        //
-                        // 中间保留下来是因为双击暂停本来就在,直接换掉等于拿走一个已有的常用
-                        // 操作;而三分法是 YouTube 立起来的惯例,两侧那两块也正是横屏握持时
-                        // 拇指自然落到的位置。关掉 seek 的场景(直播)下四段退化成整屏播放/暂停。
-                        onDoubleTap = double@{ offset ->
+                        // 触控双击整屏切换播放/暂停；鼠标双击切换全屏。
+                        onDoubleTap = double@{
                             if (speedController?.active == true) return@double
                             // 窗口里双击进全屏,小窗里双击回窗口:同一个手势,放大一档。
                             if (pipWindow != null) {
@@ -1050,27 +1045,8 @@ fun PlayerShell(
                                 onFullscreenChange(!isFullscreen)
                                 return@double
                             }
-                            val zoneFraction = gestures.doubleTapZoneFraction.coerceIn(
-                                MIN_DOUBLE_TAP_ZONE_FRACTION,
-                                MAX_DOUBLE_TAP_ZONE_FRACTION,
-                            )
-                            val edgeWidth = size.width * zoneFraction
-                            val doubleTapSeekMillis = gestures.doubleTapSeekSeconds
-                                .coerceIn(MIN_SEEK_SECONDS, MAX_SEEK_SECONDS) * 1_000L
-                            when {
-                                gestures.seek && gestures.doubleTapSeek && offset.x < edgeWidth ->
-                                    nudgeSeek(player, progress, -doubleTapSeekMillis)
-                                        .also { seekNudgeMillis = accumulateNudge(seekNudgeMillis, -doubleTapSeekMillis) }
-
-                                gestures.seek && gestures.doubleTapSeek && offset.x > size.width - edgeWidth ->
-                                    nudgeSeek(player, progress, doubleTapSeekMillis)
-                                        .also { seekNudgeMillis = accumulateNudge(seekNudgeMillis, doubleTapSeekMillis) }
-
-                                else -> {
-                                    togglePlayPause()
-                                    playToggleFlash++
-                                }
-                            }
+                            togglePlayPause()
+                            playToggleFlash++
                             keepAwake()
                         },
                     )

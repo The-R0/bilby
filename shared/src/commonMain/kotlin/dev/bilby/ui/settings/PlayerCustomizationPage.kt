@@ -4205,49 +4205,7 @@ private fun GestureCustomizationCards(
             }
         }
 
-        // 3. 双击手势
-        GestureSectionCard(title = stringResource(Res.string.player_custom_gesture_double_tap_group)) {
-            PlainToggleRow(
-                icon = Icons.Outlined.FastForward,
-                title = stringResource(Res.string.settings_double_tap_seek),
-                subtitle = stringResource(Res.string.settings_double_tap_seek_subtitle),
-                checked = state.doubleTapSeek,
-                onCheckedChange = onDoubleTapSeekChange,
-            )
-            if (state.doubleTapSeek) {
-                PlainToggleRow(
-                    icon = Icons.Outlined.Timer,
-                    title = stringResource(Res.string.player_custom_sync_double_tap),
-                    subtitle = stringResource(Res.string.player_custom_sync_double_tap_subtitle),
-                    checked = layoutPrefs.syncDoubleTapWithSeekButton,
-                    onCheckedChange = { sync ->
-                        onUpdateLayout { it.copy(syncDoubleTapWithSeekButton = sync) }
-                    },
-                )
-                FractionSliderSection(
-                    title = stringResource(Res.string.player_custom_gesture_double_tap_zone),
-                    value = gestures.doubleTapZoneFraction,
-                    valueRange = MIN_DOUBLE_TAP_ZONE_FRACTION..MAX_DOUBLE_TAP_ZONE_FRACTION,
-                    steps = 4,
-                    onValueChange = { fraction ->
-                        val snapped = ((fraction * 20f).roundToInt() / 20f)
-                            .coerceIn(MIN_DOUBLE_TAP_ZONE_FRACTION, MAX_DOUBLE_TAP_ZONE_FRACTION)
-                        onUpdateLayout { it.updateGestures { g -> g.copy(doubleTapZoneFraction = snapped) } }
-                    },
-                )
-                if (!layoutPrefs.syncDoubleTapWithSeekButton) {
-                    SeekSecondsEditor(
-                        title = stringResource(Res.string.player_custom_double_tap_seconds),
-                        seconds = layoutPrefs.doubleTapSeekSeconds,
-                        onSecondsChange = { sec ->
-                            onUpdateLayout { it.copy(doubleTapSeekSeconds = sec) }
-                        },
-                    )
-                }
-            }
-        }
-
-        // 4. 长按倍速与选档
+        // 3. 长按倍速与选档
         GestureSectionCard(title = stringResource(Res.string.player_custom_gesture_speed_group)) {
             PlainToggleRow(
                 icon = Icons.Outlined.Speed,

@@ -168,9 +168,9 @@ class SettingsStore(private val store: DataStore<Preferences>) {
             defaultLiveQualityWifi = p[KEY_DEFAULT_LIVE_QUALITY] ?: DEFAULT_LIVE_QUALITY,
             defaultLiveQualityMetered = p[KEY_DEFAULT_LIVE_QUALITY_METERED] ?: DEFAULT_LIVE_QUALITY_METERED,
             playerPickUpdatesDefault = p[KEY_PLAYER_PICK_UPDATES_DEFAULT] ?: false,
-            doubleTapSeek = p[KEY_DOUBLE_TAP_SEEK] ?: true,
+            doubleTapSeek = false,
             longPressSpeed = p[KEY_LONG_PRESS_SPEED] ?: true,
-            longPressSpeedDial = p[KEY_LONG_PRESS_SPEED_DIAL] ?: true,
+            longPressSpeedDial = p[KEY_LONG_PRESS_SPEED_DIAL] ?: false,
             defaultHoldSpeed = (p[KEY_DEFAULT_HOLD_SPEED] ?: p[KEY_LEGACY_HOLD_SPEED] ?: DEFAULT_HOLD_SPEED)
                 .takeIf { it in HOLD_SPEED_OPTIONS } ?: DEFAULT_HOLD_SPEED,
             swipeSeek = p[KEY_SWIPE_SEEK] ?: true,
@@ -272,7 +272,7 @@ class SettingsStore(private val store: DataStore<Preferences>) {
             pureBlack = p[KEY_PURE_BLACK] ?: false,
             palette = p[KEY_THEME_PALETTE] ?: AppearancePrefs.DYNAMIC,
             startTab = p[KEY_START_TAB]?.let { name -> StartTab.entries.firstOrNull { it.name == name } }
-                ?: StartTab.Feed,
+                ?: StartTab.Search,
             searchLanding = p[KEY_SEARCH_LANDING] ?: true,
             predictiveBack = p[KEY_PREDICTIVE_BACK] ?: true,
             videoGridColumns = (p[KEY_VIDEO_GRID_COLUMNS] ?: AppearancePrefs.DEFAULT_VIDEO_GRID_COLUMNS)
@@ -282,7 +282,7 @@ class SettingsStore(private val store: DataStore<Preferences>) {
     }
 
     val startTab: Flow<StartTab> = store.data.map { p ->
-        p[KEY_START_TAB]?.let { name -> StartTab.entries.firstOrNull { it.name == name } } ?: StartTab.Feed
+        p[KEY_START_TAB]?.let { name -> StartTab.entries.firstOrNull { it.name == name } } ?: StartTab.Search
     }
 
     /** 启动页、主导航栏与桌面端侧栏快捷入口偏好。未落盘时兼容旧版 [KEY_START_TAB]。 */
@@ -293,9 +293,9 @@ class SettingsStore(private val store: DataStore<Preferences>) {
         } else {
             val legacyTab = p[KEY_START_TAB]?.let { name -> StartTab.entries.firstOrNull { it.name == name } }
             val startup = when (legacyTab) {
-                StartTab.Search -> StartupDestination.Search
+                StartTab.Feed -> StartupDestination.Feed
                 StartTab.Profile -> StartupDestination.Library
-                StartTab.Feed, null -> StartupDestination.Feed
+                StartTab.Search, null -> StartupDestination.Search
             }
             NavigationPrefs.Default.copy(startupPage = startup).sanitize()
         }
@@ -1020,9 +1020,9 @@ data class PlayerPrefs(
      * 一个「临时播放配置」开关关掉它;这里反过来,默认只管这一次。
      */
     val playerPickUpdatesDefault: Boolean = false,
-    val doubleTapSeek: Boolean = true,
+    val doubleTapSeek: Boolean = false,
     val longPressSpeed: Boolean = true,
-    val longPressSpeedDial: Boolean = true,
+    val longPressSpeedDial: Boolean = false,
     val defaultHoldSpeed: Float = SettingsStore.DEFAULT_HOLD_SPEED,
     val swipeSeek: Boolean = true,
     val swipeBrightnessVolume: Boolean = true,
@@ -1086,7 +1086,7 @@ data class AppearancePrefs(
      * 指到别的颜色上。
      */
     val palette: String = DYNAMIC,
-    val startTab: StartTab = StartTab.Feed,
+    val startTab: StartTab = StartTab.Search,
     val searchLanding: Boolean = true,
     val predictiveBack: Boolean = true,
     val videoGridColumns: Int = DEFAULT_VIDEO_GRID_COLUMNS,

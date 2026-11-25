@@ -464,7 +464,7 @@
     <string name="settings_feed_excluded_restore">Restore</string>
     <string name="settings_section_playback">Playback</string>
     <string name="settings_section_gestures">Gestures</string>
-    <string name="settings_gestures_summary">Double-tap, hold speed and swipe controls</string>
+    <string name="settings_gestures_summary">Hold speed and swipe controls</string>
     <string name="settings_long_press_speed">Hold for temporary speed</string>
     <string name="settings_long_press_speed_subtitle">Hold the picture to speed up</string>
     <string name="settings_default_hold_speed">Default hold speed</string>

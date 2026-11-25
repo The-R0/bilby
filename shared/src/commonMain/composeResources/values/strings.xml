@@ -547,7 +547,7 @@
     <string name="settings_feed_excluded_restore">恢复</string>
     <string name="settings_section_playback">播放</string>
     <string name="settings_section_gestures">快捷手势</string>
-    <string name="settings_gestures_summary">双击进退、长按倍速与滑动调节</string>
+    <string name="settings_gestures_summary">长按倍速与滑动调节</string>
     <string name="settings_long_press_speed">长按倍速</string>
     <string name="settings_long_press_speed_subtitle">按住画面临时加速播放</string>
     <string name="settings_default_hold_speed">默认长按倍速</string>
