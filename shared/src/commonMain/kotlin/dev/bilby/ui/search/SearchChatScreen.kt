@@ -30,7 +30,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.SegmentedListItem
 import androidx.compose.material3.minimumInteractiveComponentSize
@@ -522,17 +522,16 @@ private fun NormalSearch(
     BackHandler(enabled = state.query.isNotEmpty() && !focused) { backToLandingAction() }
     BackHandler(enabled = focused) { focusManager.clearFocus() }
 
-    // 宽屏的助理是常驻侧栏,不要这个按钮(见 [AskAgentFab])。
-    val askAgentFab = onAskAgent.takeIf { !wide }
-    val fab = askAgentFab != null
+    // 宽屏的助理是常驻侧栏,窄屏将「问助理」融入着陆页搜索栏下方与结果页搜索栏行尾,不再使用浮在右下角挡内容的悬浮按钮。
+    val compactAskAgent = onAskAgent.takeIf { !wide }
 
     val collapsing = remember { CollapsingBar() }
-    val fabExpanded by remember { derivedStateOf { collapsing.offsetPx == 0f } }
     // 打字时和换了一次查询时栏一定在:前者正对着它,后者要看得见查的是什么。
     LaunchedEffect(focused, state.query) { collapsing.offsetPx = 0f }
 
     // 聚焦时盖在结果上的那一块:正在打字而且有补全就是补全,否则是历史。
     val typing = focused && input.isNotBlank() && suggestions.isNotEmpty()
+    val showLandingAskPill = inLanding && !typing && compactAskAgent != null
     var highlightedSuggestion by remember(suggestions, typing) { mutableIntStateOf(-1) }
 
     val suggestionDropdown: @Composable (Modifier) -> Unit = { panelModifier ->
@@ -636,7 +635,13 @@ private fun NormalSearch(
             inLanding = inLanding,
             refreshing = refreshing,
             onRefresh = onRefresh.takeIf { state.query.isNotEmpty() },
-            trailing = panelToggle.takeUnless { inLanding },
+            trailing = when {
+                wide -> panelToggle.takeUnless { inLanding }
+                compactAskAgent != null && !showLandingAskPill -> {
+                    { AskAgentBarButton(onClick = compactAskAgent) }
+                }
+                else -> null
+            },
             dropdown = dropdown,
             focusRequester = searchFocusRequester,
             fieldModifier = fieldKeyModifier,
@@ -692,19 +697,25 @@ private fun NormalSearch(
                 BilbyBrandLockup(wide = wide)
                 Spacer(modifier = Modifier.height(Spacing.Loose))
                 bar(null)
+                if (showLandingAskPill && compactAskAgent != null) {
+                    FilledTonalButton(
+                        onClick = compactAskAgent,
+                        contentPadding = PaddingValues(horizontal = Spacing.Comfortable, vertical = Spacing.Tight),
+                        modifier = Modifier.padding(top = Spacing.Hair),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.AutoAwesome,
+                            contentDescription = null,
+                            modifier = Modifier.size(Dimens.IconInline),
+                        )
+                        Spacer(modifier = Modifier.width(Spacing.Tight))
+                        Text(stringResource(Res.string.search_ask_agent))
+                    }
+                }
                 Box(modifier = Modifier.weight(LandingBottomWeight).fillMaxWidth()) {
                     landingPanel?.let { panel ->
                         scrollingPanel(panel, true, false)
                     }
-                }
-            }
-            if (!focused) {
-                askAgentFab?.let {
-                    AskAgentFab(
-                        onClick = it,
-                        expanded = true,
-                        modifier = Modifier.align(Alignment.BottomEnd),
-                    )
                 }
             }
         }
@@ -735,8 +746,7 @@ private fun NormalSearch(
                         state = state,
                         actions = actions,
                         columns = columns,
-                        // 最后一条不被悬浮按钮盖住。
-                        bottomPadding = if (fab) AskAgentFabClearance else 0.dp,
+                        bottomPadding = 0.dp,
                     )
                 }
             }
@@ -760,16 +770,6 @@ private fun NormalSearch(
             Box(modifier = collapsing.modifier) { bar(null) }
             Box(modifier = Modifier.weight(1f)) {
                 body()
-                // 打字时不露:那时键盘占着下半屏,按钮会浮在历史上挡字。
-                if (!focused) {
-                    askAgentFab?.let {
-                        AskAgentFab(
-                            onClick = it,
-                            expanded = fabExpanded,
-                            modifier = Modifier.align(Alignment.BottomEnd),
-                        )
-                    }
-                }
             }
         }
     }
@@ -994,25 +994,21 @@ private fun DockedSurface(
 }
 
 /**
- * 窄屏的「问助理」:拿框里的词起助理,框是空的就只切过去。
- *
- * 宽屏没有它:助理是常驻的侧栏,自己带输入框,和空间页的动态侧栏一样不需要另一个入口。
- * 窄屏一次只放得下一种,才要一个去助理那一屏的按钮。带字的 extended FAB,列表往下读时
- * 随搜索栏一起收成图标:助理是进阶功能,没用过的人认不出那个闪光符号,静止时要读得出来。
+ * 窄屏搜索栏行尾的「问助理」按钮：紧邻搜索输入框，输入关键词时无需收起键盘即可一键交给助理，不再浮在结果列表右下角遮挡内容。
  */
 @Composable
-private fun AskAgentFab(onClick: () -> Unit, expanded: Boolean, modifier: Modifier = Modifier) {
-    ExtendedFloatingActionButton(
-        onClick = onClick,
-        expanded = expanded,
-        icon = { Icon(Icons.Outlined.AutoAwesome, contentDescription = null) },
-        text = { Text(stringResource(Res.string.search_ask_agent)) },
-        modifier = modifier.padding(Spacing.Comfortable),
-    )
+private fun AskAgentBarButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val label = stringResource(Res.string.search_ask_agent)
+    BilbyTooltip(text = label) {
+        IconButton(onClick = onClick, modifier = modifier) {
+            Icon(
+                imageVector = Icons.Outlined.AutoAwesome,
+                contentDescription = label,
+                tint = MaterialTheme.colorScheme.primary,
+            )
+        }
+    }
 }
-
-/** 列表底部为悬浮按钮留出的高度:56dp 的按钮加上下各 16dp 的边距。 */
-private val AskAgentFabClearance = 88.dp
 
 /**
  * 补全词,一行一条。点一条直接搜它(同点历史)。命中输入的那几段标成 primary,读得出补的是
