@@ -915,6 +915,12 @@
     <string name="menu_copy_link">复制链接</string>
     <string name="menu_copy_comment">复制评论</string>
     <string name="menu_open_space">查看个人空间</string>
+    <string name="menu_video_dislike">我不喜欢</string>
+    <string name="dislike_synced_both">已向 B 站提交点踩与不感兴趣反馈，AI 也将避开类似内容</string>
+    <string name="dislike_synced_view">已向 B 站提交视频点踩，并记录到本地供 AI 避开</string>
+    <string name="dislike_synced_feed">已向 B 站提交不感兴趣反馈，并记录到本地供 AI 避开</string>
+    <string name="dislike_local_only">B 站接口未接受（%1$s），已仅在本地记录供 AI 避开</string>
+    <string name="dislike_undone">已撤销不喜欢</string>
     <string name="toview_remove_action">移出稍后再看</string>
     <string name="history_delete_one_confirm">删除这条历史记录？</string>
     <string name="image_copy">复制图片</string>

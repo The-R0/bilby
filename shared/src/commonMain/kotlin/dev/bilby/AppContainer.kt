@@ -10,6 +10,7 @@ import dev.bilby.api.WbiSigner
 import dev.bilby.data.AccountRepository
 import dev.bilby.data.ArticleRepository
 import dev.bilby.data.DanmakusRepository
+import dev.bilby.data.DislikeRepository
 import dev.bilby.data.DynamicFeedStore
 import dev.bilby.data.DynamicRepository
 import dev.bilby.data.FingerprintStore
@@ -269,6 +270,11 @@ class AppContainer(
     }
 
     val customQueueDraft: CustomQueueDraftStore by lazy { CustomQueueDraftStore() }
+
+    /** 「我不喜欢」真实上报 B 站接口并落本地库供 AI 助手避开。 */
+    val dislikeRepository: DislikeRepository by lazy {
+        DislikeRepository(database, videoActionRepository)
+    }
 
     val llmClient: LlmClient by lazy {
         LlmClient(httpClient, json) { settings.llmConfig.first() }

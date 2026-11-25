@@ -853,6 +853,12 @@
     <string name="menu_copy_link">Copy link</string>
     <string name="menu_copy_comment">Copy comment</string>
     <string name="menu_open_space">Open profile</string>
+    <string name="menu_video_dislike">Not interested</string>
+    <string name="dislike_synced_both">Reported dislike and not-interested feedback to Bilibili; AI will also avoid similar videos</string>
+    <string name="dislike_synced_view">Reported video dislike to Bilibili and saved locally for AI avoidance</string>
+    <string name="dislike_synced_feed">Reported not-interested feedback to Bilibili and saved locally for AI avoidance</string>
+    <string name="dislike_local_only">Bilibili rejected the feedback (%1$s); saved locally for AI avoidance</string>
+    <string name="dislike_undone">Dislike undone</string>
     <string name="toview_remove_action">Remove from Watch later</string>
     <string name="history_delete_one_confirm">Delete this history entry?</string>
     <string name="image_copy">Copy image</string>

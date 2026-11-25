@@ -43,18 +43,101 @@ interface FeedCacheItemDao {
     }
 }
 
+@Dao
+interface AgentSessionDao {
+    @Insert
+    suspend fun insertSession(entity: AgentSessionEntity): Long
+
+    @Query("UPDATE agent_session SET lastActiveAt = :lastActiveAt WHERE id = :sessionId")
+    suspend fun touchSession(sessionId: Long, lastActiveAt: Long)
+
+    @Query("SELECT * FROM agent_session WHERE contextKey IS NULL ORDER BY lastActiveAt DESC")
+    fun observeSessions(): Flow<List<AgentSessionEntity>>
+
+    @Query("SELECT * FROM agent_session WHERE contextKey = :contextKey ORDER BY lastActiveAt DESC LIMIT 1")
+    suspend fun getSessionByContext(contextKey: String): AgentSessionEntity?
+
+    @Insert
+    suspend fun insertMessages(entities: List<AgentMessageEntity>)
+
+    @Query("SELECT * FROM agent_message WHERE sessionId = :sessionId ORDER BY seq ASC")
+    suspend fun getMessages(sessionId: Long): List<AgentMessageEntity>
+
+    @Query("SELECT COALESCE(MAX(seq), -1) FROM agent_message WHERE sessionId = :sessionId")
+    suspend fun getMaxSeq(sessionId: Long): Int
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertTurn(entity: AgentTurnEntity)
+
+    @Query("SELECT * FROM agent_turn WHERE sessionId = :sessionId ORDER BY seq ASC")
+    suspend fun getTurns(sessionId: Long): List<AgentTurnEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertVideos(entities: List<AgentVideoEntity>)
+
+    @Query("SELECT * FROM agent_video WHERE sessionId = :sessionId")
+    suspend fun getVideos(sessionId: Long): List<AgentVideoEntity>
+
+    @Query("DELETE FROM agent_session WHERE id = :sessionId")
+    suspend fun deleteSession(sessionId: Long)
+
+    @Query("DELETE FROM agent_session WHERE contextKey = :contextKey")
+    suspend fun deleteSessionByContext(contextKey: String)
+
+    @Insert
+    suspend fun insertMemory(entity: AgentMemoryEntity): Long
+
+    @Query("SELECT * FROM agent_memory ORDER BY createdAt DESC")
+    fun observeMemories(): Flow<List<AgentMemoryEntity>>
+
+    @Query("SELECT * FROM agent_memory ORDER BY createdAt DESC LIMIT :limit")
+    suspend fun recentMemories(limit: Int): List<AgentMemoryEntity>
+
+    @Query("SELECT EXISTS(SELECT 1 FROM agent_memory WHERE content = :content)")
+    suspend fun hasMemory(content: String): Boolean
+
+    @Query("DELETE FROM agent_memory WHERE id = :id")
+    suspend fun deleteMemory(id: Long)
+}
+
+@Dao
+interface DislikedVideoDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(entity: DislikedVideoEntity)
+
+    @Query("DELETE FROM disliked_video WHERE bvid = :bvid")
+    suspend fun delete(bvid: String)
+
+    @Query("SELECT * FROM disliked_video ORDER BY createdAt DESC")
+    fun observeAll(): Flow<List<DislikedVideoEntity>>
+
+    @Query("SELECT * FROM disliked_video ORDER BY createdAt DESC LIMIT :limit")
+    suspend fun recent(limit: Int): List<DislikedVideoEntity>
+
+    @Query("SELECT bvid FROM disliked_video")
+    suspend fun allBvids(): List<String>
+}
+
 @Database(
     entities = [
         FeedReadPositionEntity::class,
         FeedCacheItemEntity::class,
+        AgentSessionEntity::class,
+        AgentMessageEntity::class,
+        AgentTurnEntity::class,
+        AgentVideoEntity::class,
+        AgentMemoryEntity::class,
+        DislikedVideoEntity::class,
     ],
-    version = 9,
+    version = 10,
     exportSchema = false,
 )
 @ConstructedBy(BilbyDatabaseConstructor::class)
 abstract class BilbyDatabase : RoomDatabase() {
     abstract fun feedReadPositionDao(): FeedReadPositionDao
     abstract fun feedCacheItemDao(): FeedCacheItemDao
+    abstract fun agentSessionDao(): AgentSessionDao
+    abstract fun dislikedVideoDao(): DislikedVideoDao
 
     companion object {
         /** 文件位置与 SQLite 驱动由平台给出 [builder],其余配置两端相同。 */

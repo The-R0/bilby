@@ -1,8 +1,10 @@
 package dev.bilby.data
 
+import dev.bilby.BvidCodec
 import dev.bilby.api.BiliClient
 import dev.bilby.api.BiliConstants
 import dev.bilby.api.BiliResult
+import dev.bilby.api.appGetAction
 import dev.bilby.api.appPostAction
 import dev.bilby.api.dto.ArchiveRelationDto
 import dev.bilby.api.dto.FavFolderListDto
@@ -35,6 +37,21 @@ data class TripleResult(
 data class FavFolder(val id: Long, val title: String, val containsThis: Boolean, val count: Int)
 
 /**
+ * 向 B 站提交「我不喜欢」的真实回执。
+ *
+ * - [viewDislikeOk]: App 端视频点踩接口 `POST /x/v2/view/dislike` 是否成功(含 65007 已踩过)。
+ * - [feedDislikeOk]: App 端推荐流负反馈接口 `GET /x/feed/dislike` 是否成功(不带推荐流原生 trackid 时
+ *   服务端可能接受也可能拒绝,结果如实记录,绝不伪造成功)。
+ */
+data class DislikeOutcome(
+    val viewDislikeOk: Boolean,
+    val feedDislikeOk: Boolean,
+    val errorMessage: String? = null,
+) {
+    val syncedToBilibili: Boolean get() = viewDislikeOk || feedDislikeOk
+}
+
+/**
  * 点赞 / 投币 / 收藏这套写操作,以及查询当前互动状态、收藏夹列表。
  *
  * 这几个接口都不在 notes/playurl.md、notes/comment-toview-history.md 的覆盖范围内,
@@ -57,6 +74,68 @@ class VideoActionRepository(private val client: BiliClient) {
         LIKE_URL,
         mapOf("aid" to aid.toString(), "like" to if (like) "0" else "1"),
     )
+
+    /**
+     * 向 B 站提交视频「不喜欢」(点踩 + 推荐流不感兴趣反馈)。
+     *
+     * 1. `POST app.bilibili.com/x/v2/view/dislike` (App 端视频点踩,参数 `dislike=0` 表示点踩,`1` 表示取消)。
+     * 2. `GET app.bilibili.com/x/feed/dislike` (App 端推荐负反馈,传入 `goto=av`、`id=aid`、`reason_id=1`、可选 `mid`)。
+     * 两条均走真实网络请求与 `access_key` App 签名,结果如实返回调用方。
+     */
+    suspend fun dislikeVideo(bvid: String, upMid: Long = 0L): DislikeOutcome {
+        val aid = BvidCodec.toAid(bvid)
+        if (aid <= 0L) {
+            return DislikeOutcome(viewDislikeOk = false, feedDislikeOk = false, errorMessage = "无效 BV 号")
+        }
+        val viewResult = client.appPostAction(
+            DISLIKE_URL,
+            mapOf("aid" to aid.toString(), "dislike" to "0"),
+        )
+        val viewOk = viewResult is BiliResult.Ok ||
+            (viewResult is BiliResult.ApiError && viewResult.code == CODE_ALREADY_DISLIKED)
+
+        val feedParams = buildMap {
+            put("goto", "av")
+            put("id", aid.toString())
+            put("reason_id", FEED_DISLIKE_REASON_NOT_INTERESTED)
+            if (upMid > 0L) put("mid", upMid.toString())
+        }
+        val feedResult = client.appGetAction(FEED_DISLIKE_URL, feedParams)
+        val feedOk = feedResult is BiliResult.Ok
+
+        val error = if (!viewOk && !feedOk) {
+            formatDislikeError(viewResult) ?: formatDislikeError(feedResult)
+        } else {
+            null
+        }
+        return DislikeOutcome(viewDislikeOk = viewOk, feedDislikeOk = feedOk, errorMessage = error)
+    }
+
+    /** 撤销 B 站侧的视频点踩与不感兴趣反馈。 */
+    suspend fun cancelDislikeVideo(bvid: String, upMid: Long = 0L): Boolean {
+        val aid = BvidCodec.toAid(bvid)
+        if (aid <= 0L) return false
+        val viewResult = client.appPostAction(
+            DISLIKE_URL,
+            mapOf("aid" to aid.toString(), "dislike" to "1"),
+        )
+        val viewOk = viewResult is BiliResult.Ok ||
+            (viewResult is BiliResult.ApiError && viewResult.code == CODE_NOT_DISLIKED)
+        val feedParams = buildMap {
+            put("goto", "av")
+            put("id", aid.toString())
+            put("reason_id", FEED_DISLIKE_REASON_NOT_INTERESTED)
+            if (upMid > 0L) put("mid", upMid.toString())
+        }
+        val feedResult = client.appGetAction(FEED_DISLIKE_CANCEL_URL, feedParams)
+        return viewOk || feedResult is BiliResult.Ok
+    }
+
+    private fun formatDislikeError(result: BiliResult<Unit>): String? = when (result) {
+        is BiliResult.Ok -> null
+        is BiliResult.ApiError -> "${result.code}: ${result.message}".trimEnd(':', ' ')
+        is BiliResult.Failure -> result.cause.message ?: "网络异常"
+    }
 
     /**
      * multiply 是投币枚举而不是任意数量,官方只接受 1 或 2 枚(一次最多投 2 枚给非自己发布的
@@ -152,6 +231,12 @@ class VideoActionRepository(private val client: BiliClient) {
         // 点赞/投币走 app 端(网页端被风控),收藏留在网页端但用 batch-deal ——
         // 三个选择都照抄 PiliPlus lib/http/api.dart:51/80/110。
         private const val LIKE_URL = "${BiliConstants.APP_HOST}/x/v2/view/like"
+        private const val DISLIKE_URL = "${BiliConstants.APP_HOST}/x/v2/view/dislike"
+        private const val FEED_DISLIKE_URL = "${BiliConstants.APP_HOST}/x/feed/dislike"
+        private const val FEED_DISLIKE_CANCEL_URL = "${BiliConstants.APP_HOST}/x/feed/dislike/cancel"
+        private const val FEED_DISLIKE_REASON_NOT_INTERESTED = "1"
+        private const val CODE_NOT_DISLIKED = 65005
+        private const val CODE_ALREADY_DISLIKED = 65007
         private const val COIN_URL = "${BiliConstants.APP_HOST}/x/v2/view/coin/add"
         private const val FAV_DEAL_URL = "${BiliConstants.WEB_HOST}/x/v3/fav/resource/batch-deal"
         private const val FAV_FOLDER_LIST_URL = "${BiliConstants.WEB_HOST}/x/v3/fav/folder/created/list-all"

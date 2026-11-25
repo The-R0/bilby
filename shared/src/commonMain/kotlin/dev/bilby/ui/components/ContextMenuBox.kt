@@ -17,6 +17,7 @@ import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Share
+import androidx.compose.material.icons.outlined.ThumbDown
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -68,6 +69,7 @@ import dev.bilby.resources.action_share
 import dev.bilby.resources.comment_copied
 import dev.bilby.resources.menu_copy_link
 import dev.bilby.resources.menu_open_space
+import dev.bilby.resources.menu_video_dislike
 import dev.bilby.resources.queue_add
 import dev.bilby.resources.queue_play_next
 import dev.bilby.resources.video_bvid_clip_label
@@ -93,6 +95,16 @@ data class QueueMenuActions(
 )
 
 val LocalQueueActions = staticCompositionLocalOf<QueueMenuActions?> { null }
+
+/**
+ * 视频长按/右键「我不喜欢」动作,由 [dev.bilby.ui.BilbyApp] 提供。
+ * 调用后真实上报 B 站接口并记录到本地偏好,支持撤销。
+ */
+data class VideoDislikeActions(
+    val dislike: (bvid: String, title: String, upMid: Long, upName: String) -> Unit,
+)
+
+val LocalVideoDislikeActions = staticCompositionLocalOf<VideoDislikeActions?> { null }
 
 /**
  * 桌面右键菜单的动效方案:去掉移动端 `DropdownMenu` 默认的 `0.8 -> 1.0` 缩放弹簧,保留极短的
@@ -316,6 +328,7 @@ fun videoCommonMenuItemCount(
         if (includeQueueActions && LocalQueueActions.current != null) count += 2
         if (title == null || title.isNotBlank()) count += 1
         count += 2
+        if (LocalVideoDislikeActions.current != null) count += 1
     }
     if (upMid != 0L && onOpenUpSpace != null) count += 1
     return count
@@ -341,6 +354,7 @@ fun VideoCommonMenuItems(
 ) {
     val system = LocalSystemActions.current
     val queueActions = LocalQueueActions.current.takeIf { includeQueueActions }
+    val dislikeActions = LocalVideoDislikeActions.current
     val copyTitle = rememberCopyAction()
     val copyBvid = rememberCopyAction(
         clipLabel = stringResource(Res.string.video_bvid_clip_label),
@@ -416,6 +430,18 @@ fun VideoCommonMenuItems(
             },
             shape = menuItemShape(shareIndex, totalCount),
         )
+        if (dislikeActions != null) {
+            val dislikeIndex = cursor++
+            DropdownMenuItem(
+                onClick = {
+                    close()
+                    dislikeActions.dislike(bvid, title, upMid, upName)
+                },
+                text = { Text(stringResource(Res.string.menu_video_dislike)) },
+                leadingIcon = { Icon(Icons.Outlined.ThumbDown, contentDescription = null) },
+                shape = menuItemShape(dislikeIndex, totalCount),
+            )
+        }
     }
     if (upMid != 0L && onOpenUpSpace != null) {
         val spaceIndex = cursor

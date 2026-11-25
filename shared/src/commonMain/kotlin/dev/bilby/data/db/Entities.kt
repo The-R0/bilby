@@ -66,3 +66,111 @@ data class FeedCacheItemEntity(
         const val KIND_ARTICLE = "article"
     }
 }
+
+/**
+ * 助理的一段会话。搜索页的对话与播放页「找相关」是同一张表,[contextKey] 区分:
+ * 搜索会话是 null,找相关会话存它所属视频的 bvid —— 打开那条视频时按它找回这一段。
+ */
+@Entity(tableName = "agent_session")
+data class AgentSessionEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val createdAt: Long,
+    val lastActiveAt: Long,
+    val title: String,
+    val contextKey: String? = null,
+)
+
+/**
+ * 会话内的一条消息,对应 LlmProtocol.ChatMessage,原样回放给模型续上下文(含 Gemini thought_signature)。
+ */
+@Entity(
+    tableName = "agent_message",
+    foreignKeys = [
+        ForeignKey(
+            entity = AgentSessionEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["sessionId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [Index("sessionId")],
+)
+data class AgentMessageEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val sessionId: Long,
+    val seq: Int,
+    val role: String,
+    val content: String?,
+    val toolCallsJson: String?,
+    val toolCallId: String?,
+    val name: String?,
+    val extraContentJson: String? = null,
+    val createdAt: Long,
+)
+
+/** 一轮在界面上的样子:序列化的 AgentTurnState。 */
+@Entity(
+    tableName = "agent_turn",
+    foreignKeys = [
+        ForeignKey(
+            entity = AgentSessionEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["sessionId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [Index(value = ["sessionId", "seq"], unique = true)],
+)
+data class AgentTurnEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val sessionId: Long,
+    val seq: Int,
+    val query: String?,
+    val stateJson: String,
+    val createdAt: Long,
+)
+
+/** 工具返回过的视频(溯源白名单与卡片元数据)。 */
+@Entity(
+    tableName = "agent_video",
+    primaryKeys = ["sessionId", "bvid"],
+    foreignKeys = [
+        ForeignKey(
+            entity = AgentSessionEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["sessionId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [Index("sessionId")],
+)
+data class AgentVideoEntity(
+    val sessionId: Long,
+    val bvid: String,
+    val title: String?,
+    val coverUrl: String?,
+    val upName: String?,
+)
+
+/** 助理通过 save_memory 记下的跨会话偏好/事实。 */
+@Entity(tableName = "agent_memory")
+data class AgentMemoryEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val content: String,
+    val createdAt: Long,
+)
+
+/**
+ * 用户长按标记「我不喜欢」的视频记录。
+ *
+ * 提交时会同步调用 B 站 App 端点踩与负反馈接口,同时保存在本地供内置 AI 助手在推荐时主动避开。
+ */
+@Entity(tableName = "disliked_video")
+data class DislikedVideoEntity(
+    @PrimaryKey val bvid: String,
+    val title: String,
+    val upMid: Long,
+    val upName: String,
+    val syncedToBili: Boolean,
+    val createdAt: Long,
+)

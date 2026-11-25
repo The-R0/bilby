@@ -505,26 +505,33 @@ suspend fun BiliClient.postJsonAction(
     rawPostJson(url, body, params, referer).body<BiliEnvelope>()
 }
 
-/** app 路线的写接口(点赞/投币):access_key + appkey 签名,不带 Cookie。 */
+/** app 路线的写接口(点赞/投币/点踩):access_key + appkey 签名,不带 Cookie。 */
 suspend fun BiliClient.appPostAction(
     url: String,
     form: Map<String, String> = emptyMap(),
-): BiliResult<Unit> = envelopeResult(url) { appPostForm(url, form).body<BiliEnvelope>() }
+): BiliResult<Unit> = envelopeResult(url, method = "POST") { appPostForm(url, form).body<BiliEnvelope>() }
+
+/** app 路线的 GET 反馈接口(如推荐流不感兴趣):access_key + appkey 签名,不带 Cookie。 */
+suspend fun BiliClient.appGetAction(
+    url: String,
+    params: Map<String, String> = emptyMap(),
+): BiliResult<Unit> = envelopeResult(url, method = "GET") { appGet(url, params).body<BiliEnvelope>() }
 
 private suspend inline fun BiliClient.envelopeResult(
     url: String,
+    method: String = "POST",
     request: () -> BiliEnvelope,
 ): BiliResult<Unit> = runCatching(request).fold(
     onSuccess = { envelope ->
         if (envelope.code == 0) {
             BiliResult.Ok(Unit)
         } else {
-            BiliLog.w("POST ${url.pathOnly()} 失败(${envelope.code}): ${envelope.message}")
+            BiliLog.w("$method ${url.pathOnly()} 失败(${envelope.code}): ${envelope.message}")
             if (envelope.code == CODE_NOT_LOGGED_IN) invalidateIfLoggedOut()
             BiliResult.ApiError(envelope.code, envelope.message)
         }
     },
-    onFailure = { transportFailure("POST ${url.pathOnly()}", it) },
+    onFailure = { transportFailure("$method ${url.pathOnly()}", it) },
 )
 
 suspend inline fun <reified T> BiliClient.postForm(

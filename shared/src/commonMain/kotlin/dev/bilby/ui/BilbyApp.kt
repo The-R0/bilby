@@ -248,8 +248,10 @@ import dev.bilby.player.PlayerConnection
 import dev.bilby.player.PlayerHandle
 import dev.bilby.player.SleepTimerMode
 import dev.bilby.ui.components.LocalQueueActions
+import dev.bilby.ui.components.LocalVideoDislikeActions
 import dev.bilby.ui.components.PaneSheet
 import dev.bilby.ui.components.QueueMenuActions
+import dev.bilby.ui.components.VideoDislikeActions
 import dev.bilby.ui.player.EpisodeList
 import dev.bilby.ui.player.EpisodeRow
 import dev.bilby.ui.player.EpisodeTarget
@@ -1213,7 +1215,55 @@ private fun BilbyApp(
         }
     }
 
-    CompositionLocalProvider(LocalQueueActions provides queueMenuActions) {
+    val dislikeSyncedBothText = stringResource(Res.string.dislike_synced_both)
+    val dislikeSyncedViewText = stringResource(Res.string.dislike_synced_view)
+    val dislikeSyncedFeedText = stringResource(Res.string.dislike_synced_feed)
+    val dislikeUndoneText = stringResource(Res.string.dislike_undone)
+    val undoLabel = stringResource(Res.string.action_undo)
+    val videoDislikeActions = remember(
+        container,
+        snackbarHostState,
+        snackbarScope,
+        dislikeSyncedBothText,
+        dislikeSyncedViewText,
+        dislikeSyncedFeedText,
+        dislikeUndoneText,
+        undoLabel,
+    ) {
+        VideoDislikeActions { bvid, title, upMid, upName ->
+            snackbarScope.launch {
+                val outcome = container.dislikeRepository.dislike(
+                    bvid = bvid,
+                    title = title,
+                    upMid = upMid,
+                    upName = upName,
+                )
+                val message = when {
+                    outcome.viewDislikeOk && outcome.feedDislikeOk -> dislikeSyncedBothText
+                    outcome.viewDislikeOk -> dislikeSyncedViewText
+                    outcome.feedDislikeOk -> dislikeSyncedFeedText
+                    else -> dev.bilby.getString(
+                        Res.string.dislike_local_only,
+                        outcome.errorMessage.orEmpty().ifBlank { "unknown" },
+                    )
+                }
+                val res = snackbarHostState.showSnackbar(
+                    message = message,
+                    actionLabel = undoLabel,
+                    duration = SnackbarDuration.Short,
+                )
+                if (res == SnackbarResult.ActionPerformed) {
+                    container.dislikeRepository.undoDislike(bvid = bvid, upMid = upMid)
+                    snackbarHostState.showSnackbar(dislikeUndoneText, duration = SnackbarDuration.Short)
+                }
+            }
+        }
+    }
+
+    CompositionLocalProvider(
+        LocalQueueActions provides queueMenuActions,
+        LocalVideoDislikeActions provides videoDislikeActions,
+    ) {
     Box(
         modifier = Modifier
             .fillMaxSize()
