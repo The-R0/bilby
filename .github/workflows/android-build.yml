@@ -1,0 +1,64 @@
+# 自用 APK 的轻量流水线:Actions 页点 Run workflow,产物挂在运行记录的 Artifacts 里。
+# 不用 release.yml:那条是发版链路(打 tag、签名密钥、桌面双架构、来源证明),自用的包
+# 一样都不需要。推到 main 也各编一次 —— 自己的仓库,改了就是要装的意思。
+#
+# 版本号会是 0.0.0-dev:正式版本号由发版 tag 决定(见 app/build.gradle.kts),这条流水线
+# 不发版,一眼能认出不是发布包。
+name: Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    # secrets 不能出现在 if 里,经 job 级 env 转一道。
+    env:
+      HAS_DEBUG_KEYSTORE: ${{ secrets.DEBUG_KEYSTORE_B64 != '' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          # 与 ci.yml 同一档:Gradle 跑在 21,工具链要的 JDK 25 由 Gradle 自己 provision。
+          java-version: "21"
+
+      # v5 而不是 v6:与 release.yml 同一个理由(闭源缓存与商业 ToU)。
+      - uses: gradle/actions/setup-gradle@v5
+
+      # 不配 BILBY_KEYSTORE:构建脚本回落到 debug 签名,出来的 APK 可以直接装。
+      # 但 debug 签名默认是 runner 现生成的那把,每次构建都不同 —— 新包装在旧包上会报
+      # INSTALL_FAILED_UPDATE_INCOMPATIBLE。固定一把存在 secrets 里,包之间才能覆盖升级。
+      - name: Pin debug keystore
+        if: env.HAS_DEBUG_KEYSTORE == 'true'
+        env:
+          DEBUG_KEYSTORE_B64: ${{ secrets.DEBUG_KEYSTORE_B64 }}
+        run: |
+          mkdir -p ~/.android
+          echo "$DEBUG_KEYSTORE_B64" | base64 -d > ~/.android/debug.keystore
+
+      # release 与 debug 各编一份,它们是**两个应用**:
+      # - release 包名是 dev.bilby,与官方发布包相同 —— 装它要先卸掉原版,
+      #   且是 R8 混淆过的,接近真实发版;
+      # - debug 包名是 dev.bilby.debug(applicationIdSuffix),与原版共存,
+      #   各自一份数据,拿来对比最方便。
+      - name: Build
+        run: ./gradlew assembleRelease assembleDebug
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bilby-apk-release
+          path: app/build/outputs/apk/release/*.apk
+          retention-days: 14
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bilby-apk-debug
+          path: app/build/outputs/apk/debug/*.apk
+          retention-days: 14
