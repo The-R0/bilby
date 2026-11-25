@@ -402,13 +402,14 @@ class SpeedSelectionPointerTest {
     }
 
     @Test(timeout = 30000)
-    fun rapidDoubleTapNudgeAccumulatesAndPreventsSnapBack() = runBlocking(Dispatchers.Swing) {
+    fun rapidSeekNudgeAccumulatesAndPreventsSnapBack() = runBlocking(Dispatchers.Swing) {
         val player = PointerTestPlayer(initialPosition = 10_000L, initialDuration = 120_000L)
         val host = PointerTestPlaybackHost(player)
         val navigation = object : NavigationEventDispatcherOwner {
             override val navigationEventDispatcher = NavigationEventDispatcher()
         }
         lateinit var capturedProgress: PlayerProgressState
+        lateinit var capturedScope: PlayerShellScope
         val scene = ImageComposeScene(390, 844, coroutineContext = coroutineContext) {
             BilbyTheme {
                 CompositionLocalProvider(LocalPlaybackHost provides host, LocalNavigationEventDispatcherOwner provides navigation) {
@@ -417,29 +418,26 @@ class SpeedSelectionPointerTest {
                             player = player, attached = false, placeholderCoverUrl = "",
                             isFullscreen = false, onFullscreenChange = {}, locked = false, onLockedChange = {}, title = "",
                             modifier = Modifier.size(390.dp, 220.dp),
-                            overlay = { capturedProgress = progressState },
+                            overlay = {
+                                capturedProgress = progressState
+                                capturedScope = this
+                            },
                         )
                     }
                 }
             }
         }
         suspend fun frame() { repeat(3) { scene.render(System.nanoTime()).close(); delay(20) } }
-        fun event(type: PointerEventType, x: Float, y: Float) = scene.sendPointerEvent(type, Offset(x, y), type = PointerType.Touch)
-        suspend fun doubleTapRight() {
-            event(PointerEventType.Press, 350f, 110f)
-            event(PointerEventType.Release, 350f, 110f)
-            delay(60)
-            event(PointerEventType.Press, 350f, 110f)
-            event(PointerEventType.Release, 350f, 110f)
-            frame()
-        }
         try {
             frame()
-            doubleTapRight()
+            capturedScope.seekByMillis(10_000L)
+            frame()
             delay(60)
-            doubleTapRight()
+            capturedScope.seekByMillis(10_000L)
+            frame()
             delay(60)
-            doubleTapRight()
+            capturedScope.seekByMillis(10_000L)
+            frame()
             assertEquals(listOf(20_000L, 30_000L, 40_000L), player.seekTargets)
             assertEquals(40_000L, capturedProgress.positionMillis)
             // 等待超过一次 200ms 轮询,确认不会被尚未更新的 player.currentPosition(10s) 回弹覆盖
@@ -449,6 +447,42 @@ class SpeedSelectionPointerTest {
             // 播放器回报 seek discontinuity 后解除锁定
             player.notifySeekDiscontinuity(10_000L, 40_000L)
             assertNull(capturedProgress.pendingSeekTargetMillis)
+        } finally { scene.close() }
+    }
+
+    @Test(timeout = 30000)
+    fun doubleTapEdgeTogglesPlayPauseInsteadOfSeeking() = runBlocking(Dispatchers.Swing) {
+        val player = PointerTestPlayer(initialPosition = 10_000L, initialDuration = 120_000L)
+        val host = PointerTestPlaybackHost(player)
+        val navigation = object : NavigationEventDispatcherOwner {
+            override val navigationEventDispatcher = NavigationEventDispatcher()
+        }
+        val scene = ImageComposeScene(390, 844, coroutineContext = coroutineContext) {
+            BilbyTheme {
+                CompositionLocalProvider(LocalPlaybackHost provides host, LocalNavigationEventDispatcherOwner provides navigation) {
+                    Box(Modifier.fillMaxSize()) {
+                        PlayerShell(
+                            player = player, attached = false, placeholderCoverUrl = "",
+                            isFullscreen = false, onFullscreenChange = {}, locked = false, onLockedChange = {}, title = "",
+                            modifier = Modifier.size(390.dp, 220.dp),
+                        )
+                    }
+                }
+            }
+        }
+        suspend fun frame() { repeat(3) { scene.render(System.nanoTime()).close(); delay(20) } }
+        fun event(type: PointerEventType, x: Float, y: Float) = scene.sendPointerEvent(type, Offset(x, y), type = PointerType.Touch)
+        try {
+            frame()
+            // 双击右侧边缘应切换播放/暂停,不再触发 10 秒快进
+            event(PointerEventType.Press, 350f, 110f)
+            event(PointerEventType.Release, 350f, 110f)
+            delay(60)
+            event(PointerEventType.Press, 350f, 110f)
+            event(PointerEventType.Release, 350f, 110f)
+            frame()
+            assertEquals(0, player.seeks)
+            assertEquals(1, player.playPauseCalls)
         } finally { scene.close() }
     }
 
