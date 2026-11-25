@@ -1,11 +1,14 @@
 package dev.bilby.agent
 
+import kotlinx.serialization.Serializable
+
 /**
  * 一次工具调用在界面上的样子:标签、中间结果、跑完没有。
  *
  * [items] 是 DESIGN 3.4 的"中间结果可点" —— 助理翻到一半用户看中了可以直接点走,
  * 所以它属于这一步本身,不是等答案出来之后才有的东西。
  */
+@Serializable
 data class AgentStep(
     val id: Int,
     val kind: StepKind,
@@ -24,6 +27,7 @@ data class AgentStep(
  * 整个丢掉,于是「找相关」跑的过程里没有中间结果卡片,3.4 那条在播放页根本不成立,而看代码
  * 的人不会知道它少了一段,因为那份 reducer 自己是自洽的。
  */
+@Serializable
 data class AgentTurnState(
     val steps: List<AgentStep> = emptyList(),
     val answer: AgentAnswer? = null,

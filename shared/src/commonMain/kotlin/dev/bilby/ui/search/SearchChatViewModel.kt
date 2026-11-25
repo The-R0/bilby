@@ -8,7 +8,12 @@ import dev.bilby.agent.AgentTurnState
 import dev.bilby.agent.ChatMessage
 import dev.bilby.agent.TraceItem
 import dev.bilby.agent.reduce
+import dev.bilby.data.AgentSessionRepository
+import dev.bilby.data.DislikeRepository
 import dev.bilby.data.SearchRepository
+import dev.bilby.data.db.AgentMemoryEntity
+import dev.bilby.data.db.AgentSessionEntity
+import dev.bilby.data.db.DislikedVideoEntity
 import dev.bilby.BiliLog
 import dev.bilby.data.SettingsStore
 import dev.bilby.data.SidePanelId
@@ -63,6 +68,8 @@ class SearchChatViewModel(
     private val searchRepository: SearchRepository,
     private val agentLoop: AgentLoop,
     private val settings: SettingsStore,
+    private val sessionRepository: AgentSessionRepository,
+    private val dislikeRepository: DislikeRepository,
     /** 展开 b23.tv 短链,即 `BiliClient.resolveRedirect`。 */
     private val resolveShortLink: suspend (String) -> String,
 ) : ViewModel() {
@@ -105,10 +112,20 @@ class SearchChatViewModel(
 
     fun setAgentPanelWidth(widthDp: Float) = viewModelScope.launch { settings.saveSidePanelWidth(SidePanelId.SearchAgent, widthDp) }
 
-    /**
-     * 会话内多轮共享的上下文(DESIGN 3.1 修订)。**只含本会话的对话与工具返回**,
-     * 观看历史一个字都不会进来。会话由用户点"新会话"显式开启,不自动续接。
-     */
+    /** 已持久化的助理会话列表,最近活跃的在前。 */
+    val agentSessions: StateFlow<List<AgentSessionEntity>> = sessionRepository.observeSessions()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** 跨会话偏好记忆列表。 */
+    val memories: StateFlow<List<AgentMemoryEntity>> = sessionRepository.observeMemories()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** 已标记「我不喜欢」的视频列表。 */
+    val dislikedVideos: StateFlow<List<DislikedVideoEntity>> = dislikeRepository.observeDisliked()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** 会话内多轮共享的上下文与持久化会话 id。 */
+    private var activeSessionId: Long? = null
     private var history: List<ChatMessage> = emptyList()
     private var seenBvids: Set<String> = emptySet()
     private var traces: Map<String, TraceItem> = emptyMap()
@@ -127,10 +144,61 @@ class SearchChatViewModel(
     fun newSession() {
         agentJob?.cancel()
         agentJob = null
+        activeSessionId = null
         history = emptyList()
         seenBvids = emptySet()
         traces = emptyMap()
         _state.update { it.copy(agent = AgentSearchState()) }
+    }
+
+    /** 一键快捷口味发现提示词。 */
+    fun sendQuickPrompt(prompt: String) {
+        val trimmed = prompt.trim()
+        if (trimmed.isEmpty()) return
+        _state.update { it.copy(mode = SearchMode.Agent) }
+        startAgentTurn(trimmed)
+    }
+
+    /** 恢复一段已保存的历史会话。 */
+    fun openSession(sessionId: Long) {
+        agentJob?.cancel()
+        agentJob = null
+        viewModelScope.launch {
+            val loadedMessages = sessionRepository.loadMessages(sessionId)
+            val loadedTurns = sessionRepository.loadTurns(sessionId)
+            val (loadedBvids, loadedTraces) = sessionRepository.loadVideos(sessionId)
+            activeSessionId = sessionId
+            history = loadedMessages
+            seenBvids = loadedBvids
+            traces = loadedTraces
+            val restoredTurns = loadedTurns.mapNotNull { stored ->
+                val q = stored.query ?: return@mapNotNull null
+                SearchTurn(nextTurnId++, q, stored.state.copy(running = false))
+            }
+            _state.update {
+                it.copy(
+                    mode = SearchMode.Agent,
+                    agent = AgentSearchState(turns = restoredTurns),
+                )
+            }
+        }
+    }
+
+    fun deleteSession(sessionId: Long) {
+        viewModelScope.launch {
+            sessionRepository.deleteSession(sessionId)
+            if (activeSessionId == sessionId) {
+                newSession()
+            }
+        }
+    }
+
+    fun deleteMemory(id: Long) {
+        viewModelScope.launch { sessionRepository.deleteMemory(id) }
+    }
+
+    fun removeDisliked(bvid: String, upMid: Long) {
+        viewModelScope.launch { dislikeRepository.undoDislike(bvid, upMid) }
     }
 
     private val _state = MutableStateFlow(SearchChatUiState())
@@ -306,30 +374,55 @@ class SearchChatViewModel(
     }
 
     /**
-     * 会话只活在内存里,随 ViewModel 生灭,不落库。
-     *
-     * 助理上下文是一次性的:它只含本次意图(DESIGN 3.3 第 4 条),用户开新会话就是明确表示
-     * 不要它了。存下来既没有消费方(这一版没有会话列表),又要为"该不该续接"反复做判断,
-     * 而任何续接都在把上下文变成一份沉淀的画像。
+     * 跑一轮助理循环:读取跨会话偏好记忆与「我不喜欢」黑名单,在代码层硬过滤不喜欢的视频,
+     * 并在本轮正常结束后把消息、轮次展示状态与视频白名单落入 Room。
      */
     private fun runAgent(turnId: Long, query: String) {
         // 上一轮还在跑就先停掉:同一个会话里两个循环并行会交替往 history 上追加,
         // 拼出一段谁也没说过的对话。
         agentJob?.cancel()
+        val turnSeq = _state.value.agent.turns.indexOfFirst { it.id == turnId }
+            .let { if (it >= 0) it + 1 else _state.value.agent.turns.size }
         agentJob = viewModelScope.launch {
+            var completedMessages: List<ChatMessage>? = null
+            var completedSeen: Set<String> = seenBvids
+            var completedTraces: Map<String, TraceItem> = traces
             try {
+                val currentMemories = sessionRepository.recentMemories()
+                val dislikedRows = dislikeRepository.recentDisliked(DISLIKE_PROMPT_LIMIT)
+                val dislikedSummary = dislikedRows.map { row ->
+                    if (row.upName.isNotBlank()) "《${row.title}》（UP 主：${row.upName}）" else "《${row.title}》"
+                }
+                val dislikedBvids = dislikeRepository.allDislikedBvids()
                 agentLoop.run(
                     intent = AgentIntent.Query(query),
                     history = history,
                     priorBvids = seenBvids,
                     priorTraces = traces,
+                    memories = currentMemories,
+                    dislikedSummary = dislikedSummary,
+                    dislikedBvids = dislikedBvids,
+                    maxResults = PERSONALIZED_MAX_RESULTS,
                     onTurnComplete = { newMessages, seen, newTraces ->
                         history = history + newMessages
                         seenBvids = seen
                         traces = newTraces
+                        completedMessages = newMessages
+                        completedSeen = seen
+                        completedTraces = newTraces
                     },
                 ).collect { event ->
                     updateAgent(turnId) { it.reduce(event) }
+                }
+                val finishedMessages = completedMessages
+                val finalState = _state.value.agent.turns.find { it.id == turnId }?.result?.copy(running = false)
+                if (finishedMessages != null && finalState != null) {
+                    val sid = activeSessionId ?: sessionRepository.newSession(
+                        title = query.take(SESSION_TITLE_MAX_LENGTH),
+                    ).also { activeSessionId = it }
+                    sessionRepository.appendMessages(sid, finishedMessages)
+                    sessionRepository.upsertVideos(sid, completedSeen, completedTraces)
+                    sessionRepository.saveTurn(sid, turnSeq, query, finalState)
                 }
             } finally {
                 // **收在 finally 里**:上面那句 cancel 打断的正是这个协程,写在 collect 之后
@@ -355,6 +448,9 @@ class SearchChatViewModel(
 
     private companion object {
         const val SUGGEST_DEBOUNCE_MS = 200L
+        const val DISLIKE_PROMPT_LIMIT = 20
+        const val PERSONALIZED_MAX_RESULTS = 8
+        const val SESSION_TITLE_MAX_LENGTH = 40
     }
 }
 

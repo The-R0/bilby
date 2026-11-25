@@ -50,6 +50,14 @@ class AgentLoop(
         // 上一轮工具返回过的视频展示信息(标题/封面/UP)。同样要跨轮累积:追问上一轮的
         // 视频时若查不到展示信息,卡片就只剩一个裸 bvid。
         priorTraces: Map<String, TraceItem> = emptyMap(),
+        /** 跨会话保存的用户偏好记忆,拼进 system prompt。 */
+        memories: List<String> = emptyList(),
+        /** 用户近期标记「我不喜欢」的摘要,提示模型避开同类内容与 UP 主。 */
+        dislikedSummary: List<String> = emptyList(),
+        /** 用户标记「我不喜欢」的 bvid 集合:代码层硬过滤,绝不会出现在推荐卡片里。 */
+        dislikedBvids: Set<String> = emptySet(),
+        /** 本轮最多保留多少条引用视频卡片。 */
+        maxResults: Int = MAX_RESULTS,
         // 本轮新产生的消息与累积的状态,交给调用方落库。不做成事件是因为它属于持久化
         // 关注点,混进 UI 事件流里每个消费方都要处理一个自己用不上的分支。
         onTurnComplete: (
@@ -70,7 +78,12 @@ class AgentLoop(
         // `drop(newFrom)`,起点在本轮的用户输入上,system 从来就没进过 history —— 只在
         // 首轮插一次的写法于是让第二轮起完全没有 system 消息,[[bvid]] 的引用格式和溯源
         // 约束都只写在里面。
-        val messages = mutableListOf(ChatMessage(role = ChatMessage.ROLE_SYSTEM, content = SYSTEM_PROMPT))
+        val systemPrompt = buildSystemPrompt(
+            maxResults = maxResults.coerceAtLeast(1),
+            memories = memories.take(MAX_INJECTED_MEMORIES),
+            dislikedSummary = dislikedSummary.take(MAX_INJECTED_DISLIKES),
+        )
+        val messages = mutableListOf(ChatMessage(role = ChatMessage.ROLE_SYSTEM, content = systemPrompt))
         messages += history
         messages += ChatMessage(role = ChatMessage.ROLE_USER, content = intent.toPrompt())
         // 新消息从这里开始(本轮的用户输入也算),用于回传给持久化层
@@ -115,7 +128,13 @@ class AgentLoop(
             // 也堵不住它:tool_choice:"required" 直接被拒,返回 400
             // "Thinking mode does not support this tool_choice"。
             if (calls.isEmpty()) {
-                val answer = toAnswer(text, seenBvids, traceByBvid)
+                val answer = toAnswer(
+                    answer = text,
+                    seenBvids = seenBvids,
+                    traceByBvid = traceByBvid,
+                    dislikedBvids = dislikedBvids,
+                    maxResults = maxResults.coerceAtLeast(1),
+                )
                 // 纯文字的回答是合法的(问的是问题,不是找视频),所以只要正文不空就算交卷。
                 if (answer.text.isNotBlank() || answer.sources.isNotEmpty()) {
                     messages += ChatMessage(
@@ -288,18 +307,24 @@ class AgentLoop(
         answer: String,
         seenBvids: Set<String>,
         traceByBvid: Map<String, TraceItem>,
+        dislikedBvids: Set<String>,
+        maxResults: Int,
     ): AgentAnswer {
         val sources = mutableListOf<AnswerSource>()
         val numberOf = mutableMapOf<String, Int>()
         val text = VIDEO_REF.replace(answer) { match ->
             val bvid = match.groupValues[1]
             val number = numberOf[bvid] ?: when {
+                bvid in dislikedBvids -> {
+                    BiliLog.w("助理引用了用户标记不喜欢的视频,已过滤:$bvid")
+                    null
+                }
                 bvid !in seenBvids -> {
                     BiliLog.w("助理引用了工具没返回过的视频,已丢弃:$bvid")
                     null
                 }
-                sources.size >= MAX_RESULTS -> {
-                    BiliLog.w("助理引用的视频超过 $MAX_RESULTS 条,多余的已丢弃:$bvid")
+                sources.size >= maxResults -> {
+                    BiliLog.w("助理引用的视频超过 $maxResults 条,多余的已丢弃:$bvid")
                     null
                 }
                 else -> {
@@ -310,6 +335,24 @@ class AgentLoop(
             if (number == null) "" else citation(number)
         }
         return AgentAnswer(text.trim(), sources)
+    }
+
+    private fun buildSystemPrompt(
+        maxResults: Int,
+        memories: List<String>,
+        dislikedSummary: List<String>,
+    ): String = buildString {
+        append(systemPrompt(maxResults))
+        if (memories.isNotEmpty()) {
+            appendLine()
+            appendLine("关于用户的已记住偏好(在搜索与推荐时主动参考):")
+            memories.forEach { appendLine("- $it") }
+        }
+        if (dislikedSummary.isNotEmpty()) {
+            appendLine()
+            appendLine("用户明确标记「我不喜欢」的视频/UP(严禁再推这些视频,并主动避开同 UP 或同类低质/雷区内容):")
+            dislikedSummary.forEach { appendLine("- $it") }
+        }
     }
 
     /** 过程里的一步:同一轮里对 [tool] 的几次调用,[indices] 是它们在这一轮调用里的下标。 */
@@ -326,6 +369,8 @@ class AgentLoop(
     private companion object {
         const val MAX_TOOL_STEPS = 12
         const val MAX_RESULTS = 5
+        const val MAX_INJECTED_MEMORIES = 30
+        const val MAX_INJECTED_DISLIKES = 20
 
         /**
          * `[[BV1xx4y1x7xx]]` 形式的引用。bvid 的字符集是 base58,这里不收窄,交给白名单校验。
@@ -334,21 +379,22 @@ class AgentLoop(
          * 之后那两个 `**` 就包着一个角标;被丢掉的引用则只剩 `****`,配不上对就原样印在正文里
          * (真机上就是这样露出来的)。角标本身已经醒目,加粗对它没有意义。
          *
-         * 这是兜底,不是主路:引用怎么写(紧贴句末、前面不留空格、最多几个)在 [SYSTEM_PROMPT]
+         * 这是兜底,不是主路:引用怎么写(紧贴句末、前面不留空格、最多几个)在 [systemPrompt]
          * 里写明,模型照着写就不需要这里再清洗。
          */
         val VIDEO_REF = Regex("""\*{0,3}\[\[(BV[0-9A-Za-z]+)]]\*{0,3}""")
 
-        /**
-         * 朴素表达任务即可。防沉迷由结构承担,不由这段文字承担(DESIGN 3.1);
-         * 这里写再多"不要让用户上瘾"也不构成任何保证。
-         */
-        const val SYSTEM_PROMPT = """
-你是一个 B 站内容助手。回答用户的问题;B 站视频是你回答的依据,也是用户接下来可以去看的地方。
+        private fun systemPrompt(maxResults: Int) = """
+你是一个 B 站内容助手。回答用户的问题,并在需要时结合用户口味发现高质量 B 站视频。
 
 做法:
 - 用工具去查,不要凭记忆回答。热评往往能反映内容质量和观众的真实评价,值得翻。
 - 只能引用你在工具返回里真实见过的视频。
+- 当用户想让你推荐视频(如「按我口味推荐」「找同类型视频」「延伸我最近看的」)时:
+  1. 先调用 `get_watch_history`、`get_favorites`、`get_followings`、`get_user_tastes` 了解用户近期的兴趣方向、常看 UP 主、已存偏好与不喜欢清单;
+  2. 以这些兴趣为线索,用 `search_videos`、`get_native_related`、`get_up_videos`、`get_hot_comments` 交叉发掘用户**尚未看过**的新视频,并尽量核验口碑;
+  3. 严禁重复推荐观看历史里已看过的视频或不喜欢清单里的内容,并说明每条视频为何契合用户口味。
+- 用户流露出稳定偏好(喜欢什么题材/风格,或明确讨厌什么类型/UP)时,调用 `save_memory` 记下来,便于后续持续推荐。
 - 查完就直接回答,回答本身就是终点。
 
 先判断用户要什么:
@@ -359,21 +405,21 @@ class AgentLoop(
 - 有歧义时按最常见的那种理解回答,最后用一句话提其他可能的含义。
 
 回答怎么写:
-- 先回答问题本身。用户问「是什么」「为什么」「哪个好」,就把答案写出来;用户要找视频,
-  用一两句话说明找到的是什么、各自适合什么需求。
+- 先回答问题本身。用户问「是什么」「为什么」「哪个好」,就把答案写出来;用户要找或要推荐视频,
+  按主题或看点分条说明各自适合什么需求,并指出与用户口味的契合点。
 - 引用视频写成 `[[bvid]]`,放在它所支持的那句话的末尾、句末标点之前,**前面不留空格**
   (写「……讲得最清楚[[bvid]]。」)。它会显示成一个可点的上标角标,视频本身另外列在回答下面。
   不要把视频当句子成分写进话里(不要写「推荐 [[bvid]],它讲了……」),也不要重复标题、
   UP 主、播放量、时长。
-- 全文最多引用 $MAX_RESULTS 个不同的视频,超出的不会显示。同一个视频再次提到时照写同一个
+- 全文最多引用 $maxResults 个不同的视频,超出的不会显示。同一个视频再次提到时照写同一个
   `[[bvid]]`,不占名额。一句话只标一个最相关的出处,不要一连标好几个。
 - 书面语,简洁。不寒暄,不写「看你想要哪种」「可以点进去看看」这类话,不用网络口语。
 - 宁可少引,不凑数。问题本身用不着视频时,一个都不引也是对的。
 
 例(用户问「线性代数怎么入门」):
 「入门的关键是先建立几何直观,再学计算。系统性的课程里,有一套从向量的几何意义讲起、
-不跳推导的系列最常被推荐 [[BV1xx4y1x7xx]];评论普遍认为第 3 集讲行列式的部分最有帮助。
-已有基础、只想补计算的,可以直接看习题讲解 [[BV1yy4y1y7yy]]。」
+不跳推导的系列最常被推荐[[BV1xx4y1x7xx]];评论普遍认为第 3 集讲行列式的部分最有帮助。
+已有基础、只想补计算的,可以直接看习题讲解[[BV1yy4y1y7yy]]。」
 
 排版只认这几种记号:`**加粗**`、`*斜体*`、`` `行内代码` ``、`- ` 无序列表、
 `1. ` 有序列表、`#` 到 `###` 的小标题。表格、代码块、链接、图片一律不要用,

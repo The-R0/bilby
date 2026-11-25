@@ -1,5 +1,7 @@
 package dev.bilby.agent
 
+import kotlinx.serialization.Serializable
+
 /** UI 实时渲染的过程直播:搜索 X → Y 的热评 → Z 的投稿。 */
 sealed interface AgentEvent {
     data class Thinking(val text: String) : AgentEvent
@@ -40,8 +42,10 @@ sealed interface AgentEvent {
  * [text] 是 markdown,引用处是一个角标记号([citation]),编号从 1 起,对应 [sources] 的
  * 位置。纯文字的回答是合法的,那时 [sources] 为空。
  */
+@Serializable
 data class AgentAnswer(val text: String, val sources: List<AnswerSource>)
 
+@Serializable
 data class AnswerSource(val bvid: String, val trace: TraceItem?)
 
 /**

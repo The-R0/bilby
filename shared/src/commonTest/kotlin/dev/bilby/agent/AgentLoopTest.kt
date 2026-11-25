@@ -245,6 +245,48 @@ class AgentLoopTest {
         assertEquals(finalSig, turn2Received[4].extraContent)
     }
 
+    @Test
+    fun `被标记不喜欢的 bvid 会被代码层硬过滤掉`() = runTest {
+        val cites = FakeStreamer { messages ->
+            if (messages.none { it.role == ChatMessage.ROLE_TOOL }) toolCall("search_videos", """{"kw":"x"}""")
+            else answer("第一条 [[BV1bad00000x]]，第二条 [[BV1good0000x]]")
+        }
+        val tool = FakeTool("search_videos", setOf("BV1bad00000x", "BV1good0000x"))
+        val events = AgentLoop(cites, ToolRegistry(listOf(tool)), json)
+            .run(
+                intent = AgentIntent.Query("推荐视频"),
+                dislikedBvids = setOf("BV1bad00000x"),
+            )
+            .toList()
+
+        val answer = events.filterIsInstance<AgentEvent.Answer>().single().answer
+        assertEquals(listOf("BV1good0000x"), answer.sources.map { it.bvid })
+        assertEquals("第一条 ，第二条 ${citation(1)}", answer.text)
+    }
+
+    @Test
+    fun `跨会话记忆、不喜欢摘要和自定义条数上限都会注入并生效`() = runTest {
+        val all = (1..8).map { "BV$it" }
+        var systemText = ""
+        val streamer = FakeStreamer { messages ->
+            systemText = messages.first { it.role == ChatMessage.ROLE_SYSTEM }.content.orEmpty()
+            if (messages.none { it.role == ChatMessage.ROLE_TOOL }) toolCall("search_videos", """{"kw":"x"}""")
+            else answer(all.joinToString("、") { "[[$it]]" })
+        }
+        val events = AgentLoop(streamer, ToolRegistry(listOf(FakeTool("search_videos", all.toSet()))), json)
+            .run(
+                intent = AgentIntent.Query("按口味推荐"),
+                memories = listOf("喜欢硬核科普与历史长视频"),
+                dislikedSummary = listOf("《某营销号标题党》（UP 主：某营销号）"),
+                maxResults = 8,
+            )
+            .toList()
+
+        assertTrue(systemText.contains("喜欢硬核科普与历史长视频"))
+        assertTrue(systemText.contains("某营销号标题党"))
+        assertEquals(8, events.filterIsInstance<AgentEvent.Answer>().single().bvids.size)
+    }
+
     /** 模型回话即交卷 —— 没有 submit_answer 那层信封了,答案就是带 [[bvid]] 的散文。 */
     private fun answer(text: String): List<LlmDelta> = listOf(
         LlmDelta.Text(text),

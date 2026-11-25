@@ -3136,6 +3136,8 @@ private fun SearchPane(
                     container.searchRepository,
                     container.agentLoop,
                     container.settings,
+                    container.agentSessionRepository,
+                    container.dislikeRepository,
                     resolveShortLink = container.biliClient::resolveRedirect,
                 )
             }
@@ -3154,6 +3156,9 @@ private fun SearchPane(
     val history by vm.searchHistory.collectAsStateWithLifecycle()
     val agentAvailable by vm.agentAvailable.collectAsStateWithLifecycle()
     val agentPanel by vm.agentPanel.collectAsStateWithLifecycle()
+    val agentSessions by vm.agentSessions.collectAsStateWithLifecycle()
+    val agentMemories by vm.memories.collectAsStateWithLifecycle()
+    val dislikedVideos by vm.dislikedVideos.collectAsStateWithLifecycle()
     val searchLanding by remember(container.settings) {
         container.settings.appearancePrefs.map { it.searchLanding }.distinctUntilChanged()
     }.collectAsStateWithLifecycle(initialValue = true)
@@ -3186,12 +3191,20 @@ private fun SearchPane(
         agentPanel = agentPanel,
         onAgentPanelOpenChange = { vm.setAgentPanelOpen(it) },
         onAgentPanelWidthChange = { vm.setAgentPanelWidth(it) },
+        agentSessions = agentSessions,
+        agentMemories = agentMemories,
+        dislikedVideos = dislikedVideos,
         agentActions = AgentActions(
             onInputChange = vm::onAgentInputChange,
             onSend = vm::sendToAgent,
             onNewSession = vm::newSession,
             onRetry = vm::retryAgent,
             onVideoClick = onVideoClick,
+            onQuickPrompt = vm::sendQuickPrompt,
+            onOpenSession = vm::openSession,
+            onDeleteSession = vm::deleteSession,
+            onDeleteMemory = vm::deleteMemory,
+            onRemoveDisliked = vm::removeDisliked,
         ),
         resultActions = SearchResultActions(
             onTabSelected = vm::onTabSelected,
@@ -5056,6 +5069,8 @@ private fun VideoPane(
                     container.offlineStore,
                     container.platform.playback,
                     container.persistScope,
+                    container.agentSessionRepository,
+                    container.dislikeRepository,
                 )
             }
         },

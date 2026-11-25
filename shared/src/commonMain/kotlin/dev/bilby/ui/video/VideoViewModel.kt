@@ -20,8 +20,10 @@ import org.jetbrains.compose.resources.StringResource
 import dev.bilby.danmaku.DanmakuRepository
 import dev.bilby.danmaku.DanmakuVote
 import dev.bilby.danmaku.withoutVoteEchoes
+import dev.bilby.data.AgentSessionRepository
 import dev.bilby.data.DanmakuPrefs
 import dev.bilby.data.DanmakuPrefsEditor
+import dev.bilby.data.DislikeRepository
 import dev.bilby.data.SettingsStore
 import dev.bilby.data.StoredDanmakuPrefsEditor
 import dev.bilby.data.SponsorBlockRepository
@@ -146,6 +148,8 @@ class VideoViewModel(
     private val offlineStore: OfflineStore,
     private val playback: PlaybackHost,
     private val persistScope: CoroutineScope,
+    private val sessionRepository: AgentSessionRepository? = null,
+    private val dislikeRepository: DislikeRepository? = null,
 ) : ViewModel() {
 
     /**
@@ -676,6 +680,7 @@ class VideoViewModel(
     private fun startVideoJobs() {
         val target = bvid
         load(target)
+        restoreRelatedSession(target)
         loadVideoTags()
         observeCurrentPart(target)
         observePlaybackPosition(target)
@@ -979,13 +984,14 @@ class VideoViewModel(
     fun findRelated() {
         val detail = _state.value.detail ?: return
         resetRelatedSession()
+        clearRelatedSessionBeforeSave = true
         _related.value = RelatedState(started = true)
         startRelatedTurn(question = null, intent = AgentIntent.Related(bvid, detail.title, detail.up.name))
     }
 
     /**
      * 找相关之后的追问。上下文是这一段会话(第一轮里已经写着正在看哪条视频),所以追问里的
-     * 「这个」「她」模型知道指什么。会话内多轮见 DESIGN 3.1,照旧不含任何观看历史。
+     * 「这个」「她」模型知道指什么。同时会带入跨会话偏好记忆并过滤已标记不喜欢的视频。
      */
     fun askRelated(question: String) {
         val text = question.trim()
@@ -1000,7 +1006,9 @@ class VideoViewModel(
         runRelatedTurn(last.id, AgentIntent.Query(question))
     }
 
-    // 会话内多轮共享的上下文,同搜索页 SearchChatViewModel 的那三样。换视频时清掉。
+    // 会话内多轮共享的上下文,同搜索页 SearchChatViewModel 的那三样。换视频时清掉,但已落库的可在重新打开时恢复。
+    private var relatedSessionId: Long? = null
+    private var clearRelatedSessionBeforeSave = false
     private var relatedHistory: List<ChatMessage> = emptyList()
     private var relatedSeen: Set<String> = emptySet()
     private var relatedTraces: Map<String, TraceItem> = emptyMap()
@@ -1010,9 +1018,33 @@ class VideoViewModel(
     private fun resetRelatedSession() {
         relatedJob?.cancel()
         relatedJob = null
+        relatedSessionId = null
+        clearRelatedSessionBeforeSave = false
         relatedHistory = emptyList()
         relatedSeen = emptySet()
         relatedTraces = emptyMap()
+    }
+
+    private fun restoreRelatedSession(target: String) {
+        val repo = sessionRepository ?: return
+        videoScope.launch {
+            val session = repo.getSessionByContext(target) ?: return@launch
+            val loadedTurns = repo.loadTurns(session.id)
+            if (loadedTurns.isEmpty()) return@launch
+            val loadedMessages = repo.loadMessages(session.id)
+            val (loadedBvids, loadedTraces) = repo.loadVideos(session.id)
+            if (bvid != target || _related.value.started) return@launch
+            relatedSessionId = session.id
+            relatedHistory = loadedMessages
+            relatedSeen = loadedBvids
+            relatedTraces = loadedTraces
+            _related.value = RelatedState(
+                started = true,
+                turns = loadedTurns.map { stored ->
+                    RelatedTurn(nextRelatedTurnId++, stored.query, stored.state.copy(running = false))
+                },
+            )
+        }
     }
 
     private fun startRelatedTurn(question: String?, intent: AgentIntent) {
@@ -1024,23 +1056,58 @@ class VideoViewModel(
     private fun runRelatedTurn(turnId: Long, intent: AgentIntent) {
         // 上一轮还在跑就先停掉:同一段会话里两个循环并行会交替往 history 上追加。
         relatedJob?.cancel()
+        val target = bvid
+        val turnSeq = _related.value.turns.indexOfFirst { it.id == turnId }
+            .let { if (it >= 0) it + 1 else _related.value.turns.size }
+        val questionForTurn = (intent as? AgentIntent.Query)?.text
         updateRelatedTurn(turnId) { AgentTurnState(running = true) }
         relatedJob = videoScope.launch {
+            var completedMessages: List<ChatMessage>? = null
+            var completedSeen: Set<String> = relatedSeen
+            var completedTraces: Map<String, TraceItem> = relatedTraces
             try {
+                val currentMemories = sessionRepository?.recentMemories().orEmpty()
+                val dislikedRows = dislikeRepository?.recentDisliked(20).orEmpty()
+                val dislikedSummary = dislikedRows.map { row ->
+                    if (row.upName.isNotBlank()) "《${row.title}》（UP 主：${row.upName}）" else "《${row.title}》"
+                }
+                val dislikedBvids = dislikeRepository?.allDislikedBvids().orEmpty()
                 agentLoop.run(
                     intent = intent,
                     history = relatedHistory,
                     priorBvids = relatedSeen,
                     priorTraces = relatedTraces,
+                    memories = currentMemories,
+                    dislikedSummary = dislikedSummary,
+                    dislikedBvids = dislikedBvids,
                     onTurnComplete = { newMessages, seen, traces ->
                         relatedHistory = relatedHistory + newMessages
                         relatedSeen = seen
                         relatedTraces = traces
+                        completedMessages = newMessages
+                        completedSeen = seen
+                        completedTraces = traces
                     },
                 ).collect { event ->
                     // 折叠规则与搜索页是同一份(agent/AgentTurn.kt)。这里曾经另写一份,
                     // 而那份把 ToolFinished 整个吞了 —— 中间结果卡片在播放页从来没出现过。
                     updateRelatedTurn(turnId) { it.reduce(event) }
+                }
+                val repo = sessionRepository
+                val finishedMessages = completedMessages
+                val finalState = _related.value.turns.find { it.id == turnId }?.result?.copy(running = false)
+                if (repo != null && finishedMessages != null && finalState != null && bvid == target) {
+                    if (clearRelatedSessionBeforeSave) {
+                        repo.deleteSessionByContext(target)
+                        clearRelatedSessionBeforeSave = false
+                    }
+                    val sid = relatedSessionId ?: repo.newSession(
+                        title = _state.value.detail?.title?.take(40) ?: target,
+                        contextKey = target,
+                    ).also { relatedSessionId = it }
+                    repo.appendMessages(sid, finishedMessages)
+                    repo.upsertVideos(sid, completedSeen, completedTraces)
+                    repo.saveTurn(sid, turnSeq, questionForTurn, finalState)
                 }
             } finally {
                 // 收在 finally 里,理由同 SearchChatViewModel.runAgent:被取消的那一轮也要停下转圈。

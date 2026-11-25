@@ -4,10 +4,13 @@ import dev.bilby.agent.AgentLoop
 import dev.bilby.agent.LlmClient
 import dev.bilby.agent.ToolRegistry
 import dev.bilby.agent.createBiliTools
+import dev.bilby.agent.createTasteTools
+import dev.bilby.agent.saveMemoryTool
 import dev.bilby.api.BiliClient
 import dev.bilby.api.DeviceFingerprint
 import dev.bilby.api.WbiSigner
 import dev.bilby.data.AccountRepository
+import dev.bilby.data.AgentSessionRepository
 import dev.bilby.data.ArticleRepository
 import dev.bilby.data.DanmakusRepository
 import dev.bilby.data.DislikeRepository
@@ -280,13 +283,26 @@ class AppContainer(
         LlmClient(httpClient, json) { settings.llmConfig.first() }
     }
 
+    /** 助理会话与跨会话记忆的持久化。 */
+    val agentSessionRepository: AgentSessionRepository by lazy {
+        AgentSessionRepository(database, json)
+    }
+
     private val toolRegistry: ToolRegistry by lazy {
         ToolRegistry(
-            createBiliTools(searchRepository, videoRepository, spaceRepository, commentRepository, biliClient)
+            createBiliTools(searchRepository, videoRepository, spaceRepository, commentRepository, biliClient) +
+                createTasteTools(
+                    historyRepository = historyRepository,
+                    favRepository = favRepository,
+                    followRepository = followRepository,
+                    sessionRepository = agentSessionRepository,
+                    dislikeRepository = dislikeRepository,
+                ) +
+                saveMemoryTool(agentSessionRepository::addMemory),
         )
     }
 
-    /** 无状态:每次调用都是新的一轮,不跨轮携带任何东西(DESIGN 3.1)。 */
+    /** 跨轮与跨会话持久化由调用方接入 [agentSessionRepository] 和 [dislikeRepository]。 */
     val agentLoop: AgentLoop by lazy { AgentLoop(llmClient, toolRegistry, json) }
 
 }

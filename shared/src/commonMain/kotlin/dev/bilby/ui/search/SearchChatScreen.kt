@@ -64,10 +64,13 @@ import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.NorthWest
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.PrimaryTabRow
+import androidx.compose.material3.Tab
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -117,6 +120,9 @@ import dev.bilby.agent.AnswerSource
 import dev.bilby.agent.citation
 import dev.bilby.agent.StepKind
 import dev.bilby.data.SideSheetPrefs
+import dev.bilby.data.db.AgentMemoryEntity
+import dev.bilby.data.db.AgentSessionEntity
+import dev.bilby.data.db.DislikedVideoEntity
 import dev.bilby.ui.AdaptiveListContent
 import dev.bilby.ui.BilbyWindowSize
 import dev.bilby.ui.isAtLeast
@@ -181,6 +187,11 @@ class AgentActions(
     val onNewSession: () -> Unit,
     val onRetry: () -> Unit,
     val onVideoClick: (bvid: String) -> Unit,
+    val onQuickPrompt: (String) -> Unit = {},
+    val onOpenSession: (Long) -> Unit = {},
+    val onDeleteSession: (Long) -> Unit = {},
+    val onDeleteMemory: (Long) -> Unit = {},
+    val onRemoveDisliked: (bvid: String, upMid: Long) -> Unit = { _, _ -> },
 )
 
 /**
@@ -212,6 +223,10 @@ fun SearchChatScreen(
     agentPanel: SideSheetPrefs? = null,
     onAgentPanelOpenChange: (Boolean) -> Unit = {},
     onAgentPanelWidthChange: (Float) -> Unit = {},
+    /** 持久化的助理会话、偏好记忆与不喜欢列表。 */
+    agentSessions: List<AgentSessionEntity> = emptyList(),
+    agentMemories: List<AgentMemoryEntity> = emptyList(),
+    dislikedVideos: List<DislikedVideoEntity> = emptyList(),
     /** 最近搜过的词,最近的在前。 */
     searchHistory: List<String> = emptyList(),
     onHistoryClick: (String) -> Unit = {},
@@ -231,6 +246,7 @@ fun SearchChatScreen(
     val windowSize = rememberBilbyWindowSize()
     val wide = windowSize.isAtLeast(BilbyWindowSize.Expanded)
     val focusManager = LocalFocusManager.current
+    var libraryOpen by remember { mutableStateOf(false) }
     // **发送要收焦点。** 历史盖在结果上的判据之一就是"光标在输入框里"(见 NormalSearch),
     // 而发送不动焦点,于是搜完之后这一屏还停在历史上。点历史、问助理同理。
     val search: () -> Unit = {
@@ -287,6 +303,7 @@ fun SearchChatScreen(
             // 侧栏卡片与搜索栏同一条上沿。
             modifier = modifier.fillMaxSize().padding(top = Spacing.Tight),
             headerActions = {
+                AgentLibraryIconButton(onClick = { libraryOpen = true })
                 if (state.agent.turns.isNotEmpty()) {
                     NewSessionIconButton(onClick = agentActions.onNewSession)
                 }
@@ -319,12 +336,29 @@ fun SearchChatScreen(
         Column(modifier = modifier.fillMaxSize()) {
             AgentTopBar(
                 onBack = onLeaveAgent,
+                onOpenLibrary = { libraryOpen = true },
                 onNewSession = agentActions.onNewSession.takeIf { state.agent.turns.isNotEmpty() },
             )
             AgentConversation(state.agent, state.agentInput, agentActions, modifier = Modifier.weight(1f))
         }
     } else {
         Box(modifier = modifier.fillMaxSize()) { normalSearch(null) }
+    }
+
+    if (libraryOpen) {
+        AgentLibraryDialog(
+            sessions = agentSessions,
+            memories = agentMemories,
+            dislikedVideos = dislikedVideos,
+            onOpenSession = { sessionId ->
+                libraryOpen = false
+                agentActions.onOpenSession(sessionId)
+            },
+            onDeleteSession = agentActions.onDeleteSession,
+            onDeleteMemory = agentActions.onDeleteMemory,
+            onRemoveDisliked = agentActions.onRemoveDisliked,
+            onDismiss = { libraryOpen = false },
+        )
     }
 }
 
@@ -353,6 +387,20 @@ private val EmptyCaptionSlot = CaptionSlot(Modifier, null)
 private val PanelToggleWidth = 48.dp
 
 @Composable
+private fun AgentLibraryIconButton(onClick: () -> Unit) {
+    val label = stringResource(Res.string.agent_library_title)
+    BilbyTooltip(text = label) {
+        IconButton(onClick = onClick) {
+            Icon(
+                imageVector = Icons.Outlined.History,
+                contentDescription = label,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
 private fun NewSessionIconButton(onClick: () -> Unit) {
     val label = stringResource(Res.string.search_new_session)
     BilbyTooltip(text = label) {
@@ -371,6 +419,7 @@ private fun NewSessionIconButton(onClick: () -> Unit) {
 @Composable
 private fun AgentTopBar(
     onBack: () -> Unit,
+    onOpenLibrary: () -> Unit,
     onNewSession: (() -> Unit)? = null,
 ) {
     val captionSlot = rememberCaptionSlot()
@@ -394,6 +443,7 @@ private fun AgentTopBar(
                 .padding(start = Spacing.Hair)
                 .windowDragArea(captionSlot.atTop),
         )
+        AgentLibraryIconButton(onClick = onOpenLibrary)
         onNewSession?.let { NewSessionIconButton(onClick = it) }
         captionSlot.buttons?.invoke()
     }
@@ -1297,6 +1347,7 @@ private fun AgentConversation(
                 state = state,
                 onVideoClick = actions.onVideoClick,
                 onRetry = actions.onRetry,
+                onQuickPrompt = actions.onQuickPrompt,
                 inSidePanel = inSidePanel,
             )
         }
@@ -1312,19 +1363,50 @@ private fun AgentConversation(
 }
 
 /** 助理的对话,跟随最新一轮。 */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun AgentPane(
     state: AgentSearchState,
     onVideoClick: (String) -> Unit,
     onRetry: () -> Unit,
+    onQuickPrompt: (String) -> Unit,
     inSidePanel: Boolean = false,
 ) {
     if (state.turns.isEmpty()) {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        val quickPrompts = listOf(
+            stringResource(Res.string.agent_quick_taste_label) to stringResource(Res.string.agent_quick_taste_prompt),
+            stringResource(Res.string.agent_quick_recent_label) to stringResource(Res.string.agent_quick_recent_prompt),
+            stringResource(Res.string.agent_quick_fav_label) to stringResource(Res.string.agent_quick_fav_prompt),
+            stringResource(Res.string.agent_quick_profile_label) to stringResource(Res.string.agent_quick_profile_prompt),
+        )
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = Spacing.Comfortable, vertical = Spacing.Loose),
+        ) {
             EmptyState(
                 message = stringResource(Res.string.search_agent_empty),
                 icon = Icons.Outlined.AutoAwesome,
             )
+            Spacer(modifier = Modifier.height(Spacing.Loose))
+            Text(
+                text = stringResource(Res.string.agent_quick_title),
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = Spacing.Cozy),
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Tight, Alignment.CenterHorizontally),
+                verticalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                modifier = Modifier.widthIn(max = QuickPromptsMaxWidth),
+            ) {
+                quickPrompts.forEach { (label, prompt) ->
+                    AgentQuickChip(label = label, onClick = { onQuickPrompt(prompt) })
+                }
+            }
         }
         return
     }
@@ -1432,6 +1514,247 @@ private fun InputBar(
         sending = false,
         onSend = onSend,
         modifier = modifier.padding(horizontal = Spacing.Cozy, vertical = Spacing.Tight),
+    )
+}
+
+// ---- 助理快捷发现与历史偏好弹窗 ----
+
+private val QuickPromptsMaxWidth = 440.dp
+private val AgentLibraryListMaxHeight = 360.dp
+
+@Composable
+private fun AgentQuickChip(
+    label: String,
+    onClick: () -> Unit,
+) {
+    Surface(
+        shape = MaterialTheme.shapes.small,
+        color = Color.Transparent,
+        modifier = Modifier
+            .minimumInteractiveComponentSize()
+            .interactiveCard(
+                shape = MaterialTheme.shapes.small,
+                baseColor = MaterialTheme.colorScheme.secondaryContainer,
+                hoverColor = MaterialTheme.colorScheme.primaryContainer,
+            )
+            .clickable(role = Role.Button, onClick = onClick),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Hair),
+            modifier = Modifier
+                .heightIn(min = HistoryChipHeight)
+                .padding(horizontal = Spacing.Cozy),
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.AutoAwesome,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.size(HistoryChipCloseIconSize),
+            )
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+@Composable
+private fun AgentLibraryDialog(
+    sessions: List<AgentSessionEntity>,
+    memories: List<AgentMemoryEntity>,
+    dislikedVideos: List<DislikedVideoEntity>,
+    onOpenSession: (Long) -> Unit,
+    onDeleteSession: (Long) -> Unit,
+    onDeleteMemory: (Long) -> Unit,
+    onRemoveDisliked: (bvid: String, upMid: Long) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var selectedTab by remember { mutableIntStateOf(0) }
+    val tabs = listOf(
+        stringResource(Res.string.agent_tab_sessions),
+        stringResource(Res.string.agent_tab_memories),
+        stringResource(Res.string.agent_tab_dislikes),
+    )
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(Res.string.agent_library_title)) },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                PrimaryTabRow(selectedTabIndex = selectedTab) {
+                    tabs.forEachIndexed { index, title ->
+                        Tab(
+                            selected = selectedTab == index,
+                            onClick = { selectedTab = index },
+                            text = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(Spacing.Cozy))
+                Box(modifier = Modifier.fillMaxWidth().heightIn(max = AgentLibraryListMaxHeight)) {
+                    when (selectedTab) {
+                        0 -> {
+                            if (sessions.isEmpty()) {
+                                Text(
+                                    text = stringResource(Res.string.agent_sessions_empty),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(vertical = Spacing.Comfortable),
+                                )
+                            } else {
+                                LazyColumn(verticalArrangement = Arrangement.spacedBy(Spacing.Tight)) {
+                                    items(sessions, key = { it.id }) { session ->
+                                        Surface(
+                                            shape = MaterialTheme.shapes.medium,
+                                            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clickable { onOpenSession(session.id) },
+                                        ) {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                modifier = Modifier.padding(
+                                                    start = Spacing.Cozy,
+                                                    top = Spacing.Hair,
+                                                    bottom = Spacing.Hair,
+                                                    end = Spacing.Hair,
+                                                ),
+                                            ) {
+                                                Text(
+                                                    text = session.title,
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    maxLines = 2,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                    modifier = Modifier.weight(1f),
+                                                )
+                                                IconButton(onClick = { onDeleteSession(session.id) }) {
+                                                    Icon(
+                                                        imageVector = Icons.Outlined.Delete,
+                                                        contentDescription = stringResource(Res.string.agent_delete_session),
+                                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        1 -> {
+                            if (memories.isEmpty()) {
+                                Text(
+                                    text = stringResource(Res.string.agent_memories_empty),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(vertical = Spacing.Comfortable),
+                                )
+                            } else {
+                                LazyColumn(verticalArrangement = Arrangement.spacedBy(Spacing.Tight)) {
+                                    items(memories, key = { it.id }) { memory ->
+                                        Surface(
+                                            shape = MaterialTheme.shapes.medium,
+                                            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                            modifier = Modifier.fillMaxWidth(),
+                                        ) {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                modifier = Modifier.padding(
+                                                    start = Spacing.Cozy,
+                                                    top = Spacing.Hair,
+                                                    bottom = Spacing.Hair,
+                                                    end = Spacing.Hair,
+                                                ),
+                                            ) {
+                                                Text(
+                                                    text = memory.content,
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    modifier = Modifier.weight(1f),
+                                                )
+                                                IconButton(onClick = { onDeleteMemory(memory.id) }) {
+                                                    Icon(
+                                                        imageVector = Icons.Outlined.Delete,
+                                                        contentDescription = stringResource(Res.string.agent_delete_memory),
+                                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        else -> {
+                            if (dislikedVideos.isEmpty()) {
+                                Text(
+                                    text = stringResource(Res.string.agent_dislikes_empty),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(vertical = Spacing.Comfortable),
+                                )
+                            } else {
+                                val syncedLabel = stringResource(Res.string.agent_dislike_synced)
+                                val localLabel = stringResource(Res.string.agent_dislike_local)
+                                LazyColumn(verticalArrangement = Arrangement.spacedBy(Spacing.Tight)) {
+                                    items(dislikedVideos, key = { it.bvid }) { item ->
+                                        val syncText = if (item.syncedToBili) syncedLabel else localLabel
+                                        val meta = if (item.upName.isNotBlank()) "${item.upName}  $syncText" else syncText
+                                        Surface(
+                                            shape = MaterialTheme.shapes.medium,
+                                            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                            modifier = Modifier.fillMaxWidth(),
+                                        ) {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                modifier = Modifier.padding(
+                                                    start = Spacing.Cozy,
+                                                    top = Spacing.Tight,
+                                                    bottom = Spacing.Tight,
+                                                    end = Spacing.Hair,
+                                                ),
+                                            ) {
+                                                Column(modifier = Modifier.weight(1f)) {
+                                                    Text(
+                                                        text = item.title.ifBlank { item.bvid },
+                                                        style = MaterialTheme.typography.bodyMedium,
+                                                        maxLines = 2,
+                                                        overflow = TextOverflow.Ellipsis,
+                                                    )
+                                                    Text(
+                                                        text = meta,
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis,
+                                                    )
+                                                }
+                                                IconButton(onClick = { onRemoveDisliked(item.bvid, item.upMid) }) {
+                                                    Icon(
+                                                        imageVector = Icons.Outlined.Close,
+                                                        contentDescription = stringResource(Res.string.agent_dislike_undo),
+                                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(Res.string.action_done))
+            }
+        },
     )
 }
 

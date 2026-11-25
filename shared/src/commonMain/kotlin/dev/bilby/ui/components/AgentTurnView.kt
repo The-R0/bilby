@@ -31,6 +31,7 @@ import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Explore
+import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.PersonSearch
@@ -377,6 +378,8 @@ private fun StepKind.icon(): ImageVector = when (this) {
     StepKind.Comments -> Icons.Outlined.ChatBubbleOutline
     StepKind.Collection -> Icons.AutoMirrored.Outlined.PlaylistPlay
     StepKind.Related -> Icons.Outlined.Explore
+    StepKind.Memory -> Icons.Outlined.AutoAwesome
+    StepKind.Taste -> Icons.Outlined.History
     StepKind.Other -> Icons.Outlined.MoreHoriz
 }
 
@@ -390,6 +393,8 @@ private fun StepKind.labelRes(): StringResource = when (this) {
     StepKind.Comments -> Res.string.agent_step_comments
     StepKind.Collection -> Res.string.agent_step_collection
     StepKind.Related -> Res.string.agent_step_related
+    StepKind.Memory -> Res.string.agent_step_memory
+    StepKind.Taste -> Res.string.agent_step_taste
     StepKind.Other -> Res.string.agent_process
 }
 

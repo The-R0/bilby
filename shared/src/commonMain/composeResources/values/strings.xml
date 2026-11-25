@@ -161,8 +161,31 @@
     <string name="agent_step_comments">热评</string>
     <string name="agent_step_collection">合集目录</string>
     <string name="agent_step_related">相关推荐</string>
+    <string name="agent_step_memory">偏好记忆</string>
+    <string name="agent_step_taste">观看口味</string>
     <string name="agent_running">检索中…</string>
     <string name="agent_no_result">未找到结果</string>
+    <string name="agent_library_title">历史与偏好</string>
+    <string name="agent_tab_sessions">会话历史</string>
+    <string name="agent_tab_memories">偏好记忆</string>
+    <string name="agent_tab_dislikes">不喜欢</string>
+    <string name="agent_sessions_empty">还没有助理会话记录</string>
+    <string name="agent_memories_empty">还没有保存的口味记忆。告诉助理你喜欢或不喜欢什么，它就会记住。</string>
+    <string name="agent_dislikes_empty">还没有标记不喜欢的视频</string>
+    <string name="agent_dislike_synced">已同步 B 站</string>
+    <string name="agent_dislike_local">仅本地避开</string>
+    <string name="agent_dislike_undo">撤销不喜欢</string>
+    <string name="agent_delete_session">删除会话</string>
+    <string name="agent_delete_memory">删除记忆</string>
+    <string name="agent_quick_title">按口味发现视频</string>
+    <string name="agent_quick_taste_label">按我口味推荐视频</string>
+    <string name="agent_quick_taste_prompt">请先看看我最近的观看记录、收藏夹、关注的 UP 主以及已记录的偏好和不喜欢，避开我不喜欢的类型，为我挑一批现在最值得看的相关视频。</string>
+    <string name="agent_quick_recent_label">延伸我最近看的</string>
+    <string name="agent_quick_recent_prompt">请根据我最近看过的视频，找几条同主题但更深入或更有趣的延伸视频推荐给我，避开我已经标记不喜欢的内容。</string>
+    <string name="agent_quick_fav_label">找和收藏夹类似的</string>
+    <string name="agent_quick_fav_prompt">请结合我收藏夹里的视频风格，去站内发掘几条我还没看过、但质量高且合我口味的视频。</string>
+    <string name="agent_quick_profile_label">整理我的口味偏好</string>
+    <string name="agent_quick_profile_prompt">请结合我最近的观看记录、收藏夹和关注列表，帮我总结一下我常看和喜欢的视频类型，并把核心偏好记下来方便以后推荐。</string>
 
     <!-- 稍后再看 -->
     <string name="toview_empty">稍后再看是空的</string>
