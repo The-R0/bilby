@@ -69,6 +69,7 @@ import androidx.compose.material.icons.outlined.NorthWest
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TextButton
@@ -122,6 +123,7 @@ import dev.bilby.agent.StepKind
 import dev.bilby.data.SideSheetPrefs
 import dev.bilby.data.db.AgentMemoryEntity
 import dev.bilby.data.db.AgentSessionEntity
+import dev.bilby.data.db.BlockRuleEntity
 import dev.bilby.data.db.DislikedVideoEntity
 import dev.bilby.ui.AdaptiveListContent
 import dev.bilby.ui.BilbyWindowSize
@@ -192,6 +194,8 @@ class AgentActions(
     val onDeleteSession: (Long) -> Unit = {},
     val onDeleteMemory: (Long) -> Unit = {},
     val onRemoveDisliked: (bvid: String, upMid: Long) -> Unit = { _, _ -> },
+    val onAddKeywordBlock: (String) -> Unit = {},
+    val onRemoveBlockRule: (Long) -> Unit = {},
 )
 
 /**
@@ -227,6 +231,7 @@ fun SearchChatScreen(
     agentSessions: List<AgentSessionEntity> = emptyList(),
     agentMemories: List<AgentMemoryEntity> = emptyList(),
     dislikedVideos: List<DislikedVideoEntity> = emptyList(),
+    blockRules: List<BlockRuleEntity> = emptyList(),
     /** 最近搜过的词,最近的在前。 */
     searchHistory: List<String> = emptyList(),
     onHistoryClick: (String) -> Unit = {},
@@ -350,6 +355,7 @@ fun SearchChatScreen(
             sessions = agentSessions,
             memories = agentMemories,
             dislikedVideos = dislikedVideos,
+            blockRules = blockRules,
             onOpenSession = { sessionId ->
                 libraryOpen = false
                 agentActions.onOpenSession(sessionId)
@@ -357,6 +363,8 @@ fun SearchChatScreen(
             onDeleteSession = agentActions.onDeleteSession,
             onDeleteMemory = agentActions.onDeleteMemory,
             onRemoveDisliked = agentActions.onRemoveDisliked,
+            onAddKeywordBlock = agentActions.onAddKeywordBlock,
+            onRemoveBlockRule = agentActions.onRemoveBlockRule,
             onDismiss = { libraryOpen = false },
         )
     }
@@ -1568,13 +1576,17 @@ private fun AgentLibraryDialog(
     sessions: List<AgentSessionEntity>,
     memories: List<AgentMemoryEntity>,
     dislikedVideos: List<DislikedVideoEntity>,
+    blockRules: List<BlockRuleEntity>,
     onOpenSession: (Long) -> Unit,
     onDeleteSession: (Long) -> Unit,
     onDeleteMemory: (Long) -> Unit,
     onRemoveDisliked: (bvid: String, upMid: Long) -> Unit,
+    onAddKeywordBlock: (String) -> Unit,
+    onRemoveBlockRule: (Long) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var selectedTab by remember { mutableIntStateOf(0) }
+    var keywordInput by remember { mutableStateOf("") }
     val tabs = listOf(
         stringResource(Res.string.agent_tab_sessions),
         stringResource(Res.string.agent_tab_memories),
@@ -1690,18 +1702,118 @@ private fun AgentLibraryDialog(
                         }
 
                         else -> {
-                            if (dislikedVideos.isEmpty()) {
-                                Text(
-                                    text = stringResource(Res.string.agent_dislikes_empty),
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(vertical = Spacing.Comfortable),
-                                )
-                            } else {
-                                val syncedLabel = stringResource(Res.string.agent_dislike_synced)
-                                val localLabel = stringResource(Res.string.agent_dislike_local)
-                                LazyColumn(verticalArrangement = Arrangement.spacedBy(Spacing.Tight)) {
-                                    items(dislikedVideos, key = { it.bvid }) { item ->
+                            val syncedLabel = stringResource(Res.string.agent_dislike_synced)
+                            val localLabel = stringResource(Res.string.agent_dislike_local)
+                            val upPrefix = stringResource(Res.string.block_rule_up_prefix)
+                            LazyColumn(verticalArrangement = Arrangement.spacedBy(Spacing.Tight)) {
+                                item(key = "block-keyword-input") {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(Spacing.Tight),
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) {
+                                        OutlinedTextField(
+                                            value = keywordInput,
+                                            onValueChange = { keywordInput = it },
+                                            singleLine = true,
+                                            placeholder = {
+                                                Text(
+                                                    text = stringResource(Res.string.block_keyword_hint),
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                )
+                                            },
+                                            textStyle = MaterialTheme.typography.bodyMedium,
+                                            modifier = Modifier.weight(1f),
+                                        )
+                                        TextButton(
+                                            enabled = keywordInput.isNotBlank(),
+                                            onClick = {
+                                                val kw = keywordInput.trim()
+                                                if (kw.isNotEmpty()) {
+                                                    onAddKeywordBlock(kw)
+                                                    keywordInput = ""
+                                                }
+                                            },
+                                        ) {
+                                            Text(stringResource(Res.string.block_keyword_add))
+                                        }
+                                    }
+                                }
+                                item(key = "block-rules-header") {
+                                    Text(
+                                        text = stringResource(Res.string.block_rules_section),
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(top = Spacing.Hair),
+                                    )
+                                }
+                                if (blockRules.isEmpty()) {
+                                    item(key = "block-rules-empty") {
+                                        Text(
+                                            text = stringResource(Res.string.block_rules_empty),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                } else {
+                                    items(blockRules, key = { "rule-${it.id}" }) { rule ->
+                                        val title = if (rule.kind == BlockRuleEntity.KIND_UP) {
+                                            "$upPrefix  ${rule.label}"
+                                        } else {
+                                            rule.label
+                                        }
+                                        Surface(
+                                            shape = MaterialTheme.shapes.medium,
+                                            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                            modifier = Modifier.fillMaxWidth(),
+                                        ) {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                modifier = Modifier.padding(
+                                                    start = Spacing.Cozy,
+                                                    top = Spacing.Hair,
+                                                    bottom = Spacing.Hair,
+                                                    end = Spacing.Hair,
+                                                ),
+                                            ) {
+                                                Text(
+                                                    text = title,
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                    modifier = Modifier.weight(1f),
+                                                )
+                                                IconButton(onClick = { onRemoveBlockRule(rule.id) }) {
+                                                    Icon(
+                                                        imageVector = Icons.Outlined.Close,
+                                                        contentDescription = stringResource(Res.string.block_rule_remove),
+                                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                item(key = "dislikes-header") {
+                                    Text(
+                                        text = stringResource(Res.string.dislikes_section_title),
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(top = Spacing.Tight),
+                                    )
+                                }
+                                if (dislikedVideos.isEmpty()) {
+                                    item(key = "dislikes-empty") {
+                                        Text(
+                                            text = stringResource(Res.string.agent_dislikes_empty),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.padding(bottom = Spacing.Tight),
+                                        )
+                                    }
+                                } else {
+                                    items(dislikedVideos, key = { "dislike-${it.bvid}" }) { item ->
                                         val syncText = if (item.syncedToBili) syncedLabel else localLabel
                                         val meta = if (item.upName.isNotBlank()) "${item.upName}  $syncText" else syncText
                                         Surface(

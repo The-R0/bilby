@@ -67,6 +67,8 @@ fun MarkdownText(
     stopAtHeadings: Set<String> = emptySet(),
     /** 点了第几个角标(从 1 起)。null 时角标照样画,只是不可点。 */
     onCitationClick: ((Int) -> Unit)? = null,
+    /** 点了正文里的时间点(如 `03:45` 或 `1:02:10`),传入对应毫秒数;null 时按普通文本画。 */
+    onTimestampClick: ((Long) -> Unit)? = null,
 ) {
     val blocks = remember(text, stopAtHeadings) { parseMarkdown(text).upTo(stopAtHeadings) }
     val codeBackground = MaterialTheme.colorScheme.surfaceContainerHighest
@@ -76,8 +78,13 @@ fun MarkdownText(
     val citationHandler: ((Int) -> Unit)? = remember(hasCitationClick) {
         if (hasCitationClick) { index -> currentCitationClick?.invoke(index) } else null
     }
-    val annotatedBlocks = remember(blocks, codeBackground, citationColor, citationHandler) {
-        blocks.map { it to it.spans.toAnnotated(codeBackground, citationColor, citationHandler) }
+    val hasTimestampClick = onTimestampClick != null
+    val currentTimestampClick by rememberUpdatedState(onTimestampClick)
+    val timestampHandler: ((Long) -> Unit)? = remember(hasTimestampClick) {
+        if (hasTimestampClick) { millis -> currentTimestampClick?.invoke(millis) } else null
+    }
+    val annotatedBlocks = remember(blocks, codeBackground, citationColor, citationHandler, timestampHandler) {
+        blocks.map { it to it.spans.toAnnotated(codeBackground, citationColor, citationHandler, timestampHandler) }
     }
     // 块间距 8dp。**行高抬到 24 之后 4dp 不够了**:行内间距(24 − 14 ≈ 10dp 分摊到上下)已经
     // 超过块间距,于是同一段里的换行看起来比段与段之间还开,一段答案读不出分了几段。
@@ -123,6 +130,7 @@ private fun List<MdSpan>.toAnnotated(
     codeBackground: Color,
     citationColor: Color,
     onCitationClick: ((Int) -> Unit)?,
+    onTimestampClick: ((Long) -> Unit)? = null,
 ): AnnotatedString = buildAnnotatedString {
     // 上一段落的末字要带进下一段。**记号切开的是样式,不是句子**:"这样**加粗**,那样"里那个
     // 逗号是新一段的第一个字符,单看这一段它前面什么都没有,而它在读者眼里紧跟着一个汉字。
@@ -148,17 +156,65 @@ private fun List<MdSpan>.toAnnotated(
         }
         // 行内代码原样照抄:`page_size,` 里那个逗号是代码的一部分,换成全角就不是同一串字了。
         val text = if (span.code) span.text else normalizeCjkPunctuation(span.text, tail)
-        withStyle(
-            SpanStyle(
-                fontWeight = if (span.bold) FontWeight.Bold else null,
-                fontStyle = if (span.italic) FontStyle.Italic else null,
-                fontFamily = if (span.code) FontFamily.Monospace else null,
-                background = if (span.code) codeBackground else Color.Unspecified,
-            ),
-        ) {
-            append(text)
+        val baseStyle = SpanStyle(
+            fontWeight = if (span.bold) FontWeight.Bold else null,
+            fontStyle = if (span.italic) FontStyle.Italic else null,
+            fontFamily = if (span.code) FontFamily.Monospace else null,
+            background = if (span.code) codeBackground else Color.Unspecified,
+        )
+        if (!span.code && onTimestampClick != null) {
+            appendWithTimestamps(text, baseStyle, citationColor, onTimestampClick)
+        } else {
+            withStyle(baseStyle) { append(text) }
         }
         tail = text.lastOrNull() ?: tail
+    }
+}
+
+private val TimestampTokenRegex = Regex("""(?<!\d)(?:\d{1,2}:)?\d{1,2}:\d{2}(?!\d)""")
+
+/** 将 `mm:ss` 或 `h:mm:ss` 解析为毫秒;分钟/秒超范围时返回 null。 */
+internal fun parseTimestampMillis(token: String): Long? {
+    val parts = token.split(':')
+    return when (parts.size) {
+        2 -> {
+            val minutes = parts[0].toLongOrNull() ?: return null
+            val seconds = parts[1].toLongOrNull() ?: return null
+            if (seconds !in 0L..59L) return null
+            (minutes * 60L + seconds) * 1000L
+        }
+        3 -> {
+            val hours = parts[0].toLongOrNull() ?: return null
+            val minutes = parts[1].toLongOrNull() ?: return null
+            val seconds = parts[2].toLongOrNull() ?: return null
+            if (minutes !in 0L..59L || seconds !in 0L..59L) return null
+            ((hours * 60L + minutes) * 60L + seconds) * 1000L
+        }
+        else -> null
+    }
+}
+
+private fun AnnotatedString.Builder.appendWithTimestamps(
+    text: String,
+    baseStyle: SpanStyle,
+    accentColor: Color,
+    onTimestampClick: (Long) -> Unit,
+) {
+    var cursor = 0
+    for (match in TimestampTokenRegex.findAll(text)) {
+        val millis = parseTimestampMillis(match.value) ?: continue
+        if (match.range.first > cursor) {
+            withStyle(baseStyle) { append(text.substring(cursor, match.range.first)) }
+        }
+        withLink(LinkAnnotation.Clickable("ts-$millis-${match.range.first}") { onTimestampClick(millis) }) {
+            withStyle(baseStyle.copy(color = accentColor, fontWeight = FontWeight.Medium)) {
+                append(match.value)
+            }
+        }
+        cursor = match.range.last + 1
+    }
+    if (cursor < text.length) {
+        withStyle(baseStyle) { append(text.substring(cursor)) }
     }
 }
 

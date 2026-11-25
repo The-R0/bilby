@@ -6,14 +6,20 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.PlaylistAdd
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.SelectAll
+import androidx.compose.material.icons.outlined.WatchLater
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -25,12 +31,14 @@ import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.SegmentedListItem
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -40,11 +48,20 @@ import dev.bilby.agent.AgentAnswer
 import dev.bilby.agent.AnswerSource
 import dev.bilby.agent.CitationClose
 import dev.bilby.agent.CitationOpen
+import dev.bilby.player.QueueItem
 import dev.bilby.resources.*
 import dev.bilby.stringResource
 import dev.bilby.ui.theme.Dimens
 import dev.bilby.ui.theme.Spacing
 import dev.bilby.ui.theme.tabular
+
+/** 助理推荐卡片整批操作（一键全部入队 / 全部加入稍后再看），由根部 [dev.bilby.ui.BilbyApp] 提供。 */
+data class AgentBatchActions(
+    val enqueueAll: (List<QueueItem>) -> Unit,
+    val addAllToView: (List<Pair<String, String>>) -> Unit,
+)
+
+val LocalAgentBatchActions = staticCompositionLocalOf<AgentBatchActions?> { null }
 
 /**
  * 助理的回答:上面是回答正文,下面是带编号徽章(`[1]`, `[2]`)的分段引用卡片。
@@ -60,10 +77,12 @@ fun AgentAnswerView(
     onVideoClick: (String) -> Unit,
     modifier: Modifier = Modifier,
     citationContainerColor: Color = MaterialTheme.colorScheme.surfaceContainerHigh,
+    onTimestampClick: ((Long) -> Unit)? = null,
 ) {
     val copyableText = remember(answer.text) { formatCopyableAnswer(answer.text) }
     var selectingText by rememberSaveable { mutableStateOf(false) }
     val copyAnswer = rememberCopyAction()
+    val batchActions = LocalAgentBatchActions.current
     val isTouch = LocalPointerSource.current.isTouchLike
     val copyAnswerLabel = stringResource(Res.string.action_copy_answer)
     val selectTextLabel = stringResource(Res.string.action_select_text)
@@ -103,6 +122,7 @@ fun AgentAnswerView(
                         onCitationClick = { number ->
                             answer.sources.getOrNull(number - 1)?.let { onVideoClick(it.bvid) }
                         },
+                        onTimestampClick = onTimestampClick,
                     )
                 }
                 if (isTouch) {
@@ -128,12 +148,67 @@ fun AgentAnswerView(
         }
 
         if (answer.sources.isNotEmpty()) {
-            Text(
-                text = stringResource(Res.string.agent_sources),
-                style = MaterialTheme.typography.labelLargeEmphasized,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = Spacing.Hair),
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = Spacing.Hair),
+            ) {
+                Text(
+                    text = stringResource(Res.string.agent_sources),
+                    style = MaterialTheme.typography.labelLargeEmphasized,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                if (batchActions != null) {
+                    TextButton(
+                        onClick = {
+                            val queueItems = answer.sources.map { src ->
+                                QueueItem(
+                                    bvid = src.bvid,
+                                    title = src.trace?.title.orEmpty(),
+                                    upName = src.trace?.upName.orEmpty(),
+                                    coverUrl = src.trace?.coverUrl.orEmpty(),
+                                    durationSeconds = 0L,
+                                )
+                            }
+                            batchActions.enqueueAll(queueItems)
+                        },
+                        contentPadding = PaddingValues(horizontal = Spacing.Tight, vertical = Spacing.Hair),
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Outlined.PlaylistAdd,
+                            contentDescription = null,
+                            modifier = Modifier.size(Dimens.IconInline),
+                        )
+                        Spacer(modifier = Modifier.width(Spacing.Hair))
+                        Text(
+                            text = stringResource(Res.string.agent_batch_enqueue),
+                            style = MaterialTheme.typography.labelMedium,
+                        )
+                    }
+                    TextButton(
+                        onClick = {
+                            val targets = answer.sources.map { src ->
+                                src.bvid to (src.trace?.title.orEmpty())
+                            }
+                            batchActions.addAllToView(targets)
+                        },
+                        contentPadding = PaddingValues(horizontal = Spacing.Tight, vertical = Spacing.Hair),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.WatchLater,
+                            contentDescription = null,
+                            modifier = Modifier.size(Dimens.IconInline),
+                        )
+                        Spacer(modifier = Modifier.width(Spacing.Hair))
+                        Text(
+                            text = stringResource(Res.string.agent_batch_toview),
+                            style = MaterialTheme.typography.labelMedium,
+                        )
+                    }
+                }
+            }
             val totalSources = answer.sources.size
             Column(verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap)) {
                 answer.sources.forEachIndexed { index, source ->

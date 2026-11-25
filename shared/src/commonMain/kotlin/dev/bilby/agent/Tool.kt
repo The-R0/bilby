@@ -9,7 +9,7 @@ import kotlinx.serialization.json.JsonObject
  * 扫一眼就知道它查过什么。
  */
 @Serializable
-enum class StepKind { SearchVideos, SearchUsers, Up, UpVideos, Video, Comments, Collection, Related, Memory, Taste, Other }
+enum class StepKind { SearchVideos, SearchUsers, Up, UpVideos, Video, Comments, Collection, Related, Memory, Taste, Subtitle, Other }
 
 /**
  * 过程直播里用到的名字:视频标题、UP 名、合集标题。**只来自本轮之前的工具返回**,查不到就退回

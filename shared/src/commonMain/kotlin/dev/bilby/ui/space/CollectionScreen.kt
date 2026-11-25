@@ -1,11 +1,15 @@
 package dev.bilby.ui.space
 
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
@@ -13,6 +17,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MediumFlexibleTopAppBar
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -25,11 +30,14 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.bilby.api.BiliResult
 import dev.bilby.appendDistinctBy
+import dev.bilby.data.CollectionProgressRepository
 import dev.bilby.data.CollectionSort
 import dev.bilby.data.SpaceRepository
 import dev.bilby.data.SpaceVideoItem
+import dev.bilby.data.db.CollectionProgressEntity
 import dev.bilby.data.inferSeasonReverse
 import dev.bilby.data.sortedByCollectionSort
+import dev.bilby.formatDurationMillis
 import dev.bilby.resources.*
 import dev.bilby.stringResource
 import dev.bilby.ui.CaptionDragHeight
@@ -41,6 +49,7 @@ import dev.bilby.ui.components.TopBarRefreshButton
 import dev.bilby.ui.errorTextRes
 import dev.bilby.ui.padScaffoldExceptBottom
 import dev.bilby.ui.rememberCaptionSlot
+import dev.bilby.ui.theme.Spacing
 import dev.bilby.ui.theme.tabular
 import dev.bilby.ui.windowDragArea
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -62,6 +71,8 @@ data class CollectionUiState(
     val hasMore: Boolean = true,
     val error: String? = null,
     val errorRes: StringResource? = null,
+    val lastProgress: CollectionProgressEntity? = null,
+    val watchedBvids: Set<String> = emptySet(),
 )
 
 /**
@@ -77,6 +88,7 @@ class CollectionViewModel(
     private val id: Long,
     private val isSeason: Boolean,
     private val repository: SpaceRepository,
+    private val progressRepository: CollectionProgressRepository? = null,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(CollectionUiState())
@@ -96,6 +108,18 @@ class CollectionViewModel(
 
     init {
         loadMore()
+        progressRepository?.let { repo ->
+            viewModelScope.launch {
+                repo.observeProgress(mid, id, isSeason).collect { progress ->
+                    _state.update { it.copy(lastProgress = progress) }
+                }
+            }
+            viewModelScope.launch {
+                repo.observeWatchedBvids(mid, id, isSeason).collect { watched ->
+                    _state.update { it.copy(watchedBvids = watched) }
+                }
+            }
+        }
     }
 
     fun onSortChanged(sort: CollectionSort) {
@@ -358,6 +382,7 @@ fun CollectionScreen(
     onRefresh: () -> Unit,
     onVideoClick: (SpaceVideoItem) -> Unit,
     onSortChanged: (CollectionSort) -> Unit = {},
+    onResumeBvid: ((String) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
@@ -429,6 +454,7 @@ fun CollectionScreen(
             onRefresh = onRefresh,
             modifier = Modifier.fillMaxSize().padScaffoldExceptBottom(padding),
         ) {
+            val progress = state.lastProgress
             VideoListTab(
                 items = state.items,
                 appending = state.appending,
@@ -438,8 +464,67 @@ fun CollectionScreen(
                 emptyText = stringResource(Res.string.space_empty_collection_detail),
                 onLoadMore = onLoadMore,
                 onVideoClick = onVideoClick,
+                lastWatchedBvid = progress?.lastBvid,
+                watchedBvids = state.watchedBvids,
+                header = if (progress != null && onResumeBvid != null) {
+                    {
+                        CollectionContinueBanner(
+                            progress = progress,
+                            onClick = { onResumeBvid(progress.lastBvid) },
+                        )
+                    }
+                } else {
+                    null
+                },
                 modifier = Modifier.fillMaxSize(),
             )
+        }
+    }
+}
+
+@Composable
+private fun CollectionContinueBanner(
+    progress: CollectionProgressEntity,
+    onClick: () -> Unit,
+) {
+    val subtitle = if (progress.lastPositionMillis > 0L) {
+        stringResource(Res.string.collection_continue_progress, formatDurationMillis(progress.lastPositionMillis))
+    } else {
+        stringResource(Res.string.collection_continue_recent)
+    }
+    Surface(
+        onClick = onClick,
+        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = Spacing.Tight),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Cozy),
+            modifier = Modifier.padding(horizontal = Spacing.Comfortable, vertical = Spacing.Cozy),
+        ) {
+            Icon(
+                imageVector = Icons.Filled.PlayArrow,
+                contentDescription = null,
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "${stringResource(Res.string.collection_continue_watching)}  $subtitle",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = progress.lastTitle.ifBlank { progress.lastBvid },
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 }

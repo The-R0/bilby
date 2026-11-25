@@ -187,6 +187,7 @@ fun VideoScreen(
     commentState: CommentUiState,
     sponsorSegments: List<SponsorSegment>,
     onFindRelated: (() -> Unit)?,
+    onSummarize: (() -> Unit)? = null,
     /** 找相关之后的追问,见 VideoViewModel.askRelated。 */
     onAskRelated: (String) -> Unit,
     /** 重跑出错的那一轮找相关或追问。 */
@@ -243,6 +244,8 @@ fun VideoScreen(
     subtitleLan: String = "",
     subtitleCues: List<SubtitleCue> = emptyList(),
     onSelectSubtitle: (String) -> Unit = {},
+    subtitlePrefs: dev.bilby.data.SubtitlePrefs = dev.bilby.data.SubtitlePrefs(),
+    subtitleEditor: dev.bilby.data.SubtitlePrefsEditor? = null,
     /** 弹幕总开关,默认关。只在看视频时有意义——听视频没有画面挂弹幕层。 */
     danmakuPrefs: DanmakuPrefs = DanmakuPrefs(),
     danmakuEditor: DanmakuPrefsEditor? = null,
@@ -933,6 +936,12 @@ fun VideoScreen(
                         relatedOpen = false
                         onRelatedVideoClick(targetBvid)
                     },
+                    onTimestampClick = active?.let { p ->
+                        { millis ->
+                            p.seekTo(millis)
+                            if (!expandedLayout) relatedOpen = false
+                        }
+                    },
                     onAsk = onAskRelated,
                     onRetry = onRetryRelated,
                 )
@@ -1021,6 +1030,8 @@ fun VideoScreen(
                     currentSubtitleLan = subtitleLan,
                     onSubtitleTrackChange = onSelectSubtitle,
                     subtitleCues = subtitleCues,
+                    subtitlePrefs = subtitlePrefs,
+                    subtitleEditor = subtitleEditor,
                     danmakuPrefs = danmakuPrefs,
                     danmakuEditor = danmakuEditor,
                     sleepTimer = sleepTimerState,
@@ -1257,6 +1268,12 @@ fun VideoScreen(
                 onFindRelated = onFindRelated?.let { find ->
                     {
                         if (!related.started) find()
+                        relatedOpen = true
+                    }
+                },
+                onSummarize = onSummarize?.let { summarize ->
+                    {
+                        summarize()
                         relatedOpen = true
                     }
                 },

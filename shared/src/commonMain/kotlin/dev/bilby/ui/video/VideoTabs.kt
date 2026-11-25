@@ -140,6 +140,7 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.ThumbUp
+import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.DownloadForOffline
 import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material.icons.outlined.ThumbUp
@@ -352,6 +353,7 @@ fun VideoTabs(
     commentsRefreshing: Boolean = false,
     onRefreshComments: (() -> Unit)? = null,
     onFindRelated: (() -> Unit)?,
+    onSummarize: (() -> Unit)? = null,
     /** 写弹幕,见 [DanmakuInput]。 */
     danmakuInput: DanmakuInput,
     /**
@@ -587,6 +589,7 @@ fun VideoTabs(
                     onLoadTags = onLoadTags,
                     onTagClick = onTagClick,
                     onFindRelated = onFindRelated,
+                    onSummarize = onSummarize,
                     onCache = onCache,
                     onUpClick = onUpClick,
                     staffFollowed = staffFollowed,
@@ -1027,6 +1030,7 @@ private fun IntroTab(
     onLoadTags: () -> Unit,
     onTagClick: ((String) -> Unit)?,
     onFindRelated: (() -> Unit)?,
+    onSummarize: (() -> Unit)? = null,
     onCache: () -> Unit,
     followState: FollowState,
     onToggleFollow: () -> Unit,
@@ -1164,6 +1168,7 @@ private fun IntroTab(
                 onCycleEndMode = onCycleEndMode,
                 onCycleOrder = onCycleOrder,
                 onFindRelated = onFindRelated,
+                onSummarize = onSummarize,
                 onCache = onCache,
                 onRetryQueue = onRetryQueue,
             )
@@ -2912,6 +2917,7 @@ private fun LazyListScope.queueItems(
     onCycleEndMode: () -> Unit,
     onCycleOrder: () -> Unit,
     onFindRelated: (() -> Unit)?,
+    onSummarize: (() -> Unit)? = null,
     onCache: () -> Unit,
     onRetryQueue: () -> Unit,
 ) {
@@ -2925,6 +2931,7 @@ private fun LazyListScope.queueItems(
             onCycleEndMode = onCycleEndMode,
             onCycleOrder = onCycleOrder,
             onFindRelated = onFindRelated,
+            onSummarize = onSummarize,
             onCache = onCache,
         )
     }
@@ -3069,6 +3076,7 @@ private fun QueueHeader(
     onCycleEndMode: () -> Unit,
     onCycleOrder: () -> Unit,
     onFindRelated: (() -> Unit)?,
+    onSummarize: (() -> Unit)? = null,
     onCache: () -> Unit,
 ) {
     // Same-UP fallback queue (`id <= 0L && mid == upMid`) duplicates `UpRow` right above; suppress redundant click affordance.
@@ -3081,6 +3089,7 @@ private fun QueueHeader(
 
     val endLabel = stringResource(queue.endMode.labelRes())
     val orderLabel = stringResource(queue.order.labelRes())
+    val summarizeLabel = stringResource(Res.string.video_ai_summarize)
     val relatedLabel = stringResource(Res.string.video_find_related)
     val cacheLabel = stringResource(Res.string.offline_cache_action)
     val buttonTextStyle = MaterialTheme.typography.labelLarge
@@ -3089,8 +3098,10 @@ private fun QueueHeader(
     val totalLabeledWidth = remember(
         endLabel,
         orderLabel,
+        summarizeLabel,
         relatedLabel,
         cacheLabel,
+        onSummarize != null,
         onFindRelated != null,
         buttonTextStyle,
         density,
@@ -3101,6 +3112,7 @@ private fun QueueHeader(
         }
         buttonWidth(endLabel) +
             buttonWidth(orderLabel) +
+            (if (onSummarize != null) buttonWidth(summarizeLabel) else 0.dp) +
             (if (onFindRelated != null) buttonWidth(relatedLabel) else 0.dp) +
             buttonWidth(cacheLabel) +
             Spacing.Tight
@@ -3134,6 +3146,14 @@ private fun QueueHeader(
                     onCycleOrder = onCycleOrder,
                 )
                 Spacer(modifier = Modifier.weight(1f))
+                if (onSummarize != null) {
+                    QueueHeaderActionButton(
+                        icon = Icons.Outlined.Description,
+                        label = summarizeLabel,
+                        showLabel = showActionLabels,
+                        onClick = onSummarize,
+                    )
+                }
                 if (onFindRelated != null) {
                     QueueHeaderActionButton(
                         icon = Icons.Filled.AutoAwesome,

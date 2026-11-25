@@ -21,11 +21,16 @@ import dev.bilby.danmaku.DanmakuRepository
 import dev.bilby.danmaku.DanmakuVote
 import dev.bilby.danmaku.withoutVoteEchoes
 import dev.bilby.data.AgentSessionRepository
+import dev.bilby.data.BlockRuleRepository
+import dev.bilby.data.ContentBlockMatcher
 import dev.bilby.data.DanmakuPrefs
 import dev.bilby.data.DanmakuPrefsEditor
 import dev.bilby.data.DislikeRepository
 import dev.bilby.data.SettingsStore
 import dev.bilby.data.StoredDanmakuPrefsEditor
+import dev.bilby.data.StoredSubtitlePrefsEditor
+import dev.bilby.data.SubtitlePrefs
+import dev.bilby.data.SubtitlePrefsEditor
 import dev.bilby.data.SponsorBlockRepository
 import dev.bilby.data.FollowState
 import dev.bilby.data.RelationRepository
@@ -150,6 +155,7 @@ class VideoViewModel(
     private val persistScope: CoroutineScope,
     private val sessionRepository: AgentSessionRepository? = null,
     private val dislikeRepository: DislikeRepository? = null,
+    private val blockRuleRepository: BlockRuleRepository? = null,
 ) : ViewModel() {
 
     /**
@@ -713,6 +719,12 @@ class VideoViewModel(
             override fun setEnabled(enabled: Boolean) = setDanmakuEnabled(enabled)
         }
 
+    /** 字幕样式偏好(字号、底色透明度、底部抬高、双语副行柔和样式),实时生效并落盘。 */
+    val subtitlePrefs: StateFlow<SubtitlePrefs> = settings.subtitlePrefs
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SubtitlePrefs())
+
+    val subtitleEditor: SubtitlePrefsEditor = StoredSubtitlePrefsEditor(settings, persistScope)
+
     /**
      * 弹幕池随 cid 变,原因和字幕轨、SponsorBlock 片段一样:播放器全 app 共用,队列走到
      * 别的视频上时不该把那一条的弹幕留在这一页。换 cid 清空已请求分段集合与弹幕池——
@@ -990,6 +1002,17 @@ class VideoViewModel(
     }
 
     /**
+     * AI 总结当前视频:优先调用 `get_video_subtitle` 读取真实字幕并输出带时间点的核心要点。
+     */
+    fun summarizeVideo() {
+        val detail = _state.value.detail ?: return
+        resetRelatedSession()
+        clearRelatedSessionBeforeSave = true
+        _related.value = RelatedState(started = true)
+        startRelatedTurn(question = null, intent = AgentIntent.Summarize(bvid, detail.title, detail.up.name))
+    }
+
+    /**
      * 找相关之后的追问。上下文是这一段会话(第一轮里已经写着正在看哪条视频),所以追问里的
      * 「这个」「她」模型知道指什么。同时会带入跨会话偏好记忆并过滤已标记不喜欢的视频。
      */
@@ -1068,10 +1091,12 @@ class VideoViewModel(
             try {
                 val currentMemories = sessionRepository?.recentMemories().orEmpty()
                 val dislikedRows = dislikeRepository?.recentDisliked(20).orEmpty()
+                val blockRulesSummary = blockRuleRepository?.promptSummary().orEmpty()
                 val dislikedSummary = dislikedRows.map { row ->
                     if (row.upName.isNotBlank()) "《${row.title}》（UP 主：${row.upName}）" else "《${row.title}》"
-                }
+                } + blockRulesSummary
                 val dislikedBvids = dislikeRepository?.allDislikedBvids().orEmpty()
+                val blockMatcher = blockRuleRepository?.currentMatcher() ?: ContentBlockMatcher.EMPTY
                 agentLoop.run(
                     intent = intent,
                     history = relatedHistory,
@@ -1080,6 +1105,7 @@ class VideoViewModel(
                     memories = currentMemories,
                     dislikedSummary = dislikedSummary,
                     dislikedBvids = dislikedBvids,
+                    blockMatcher = blockMatcher,
                     onTurnComplete = { newMessages, seen, traces ->
                         relatedHistory = relatedHistory + newMessages
                         relatedSeen = seen

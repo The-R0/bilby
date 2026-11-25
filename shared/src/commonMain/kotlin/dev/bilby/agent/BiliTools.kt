@@ -10,7 +10,9 @@ import dev.bilby.data.SearchRepository
 import dev.bilby.data.SearchVideo
 import dev.bilby.data.SpaceArchiveOrder
 import dev.bilby.data.SpaceRepository
+import dev.bilby.data.SubtitleRepository
 import dev.bilby.data.VideoRepository
+import dev.bilby.player.SubtitleCue
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
@@ -34,16 +36,20 @@ fun createBiliTools(
     spaceRepository: SpaceRepository,
     commentRepository: CommentRepository,
     client: BiliClient,
-): List<Tool> = listOf(
-    searchVideosTool(searchRepository),
-    searchUsersTool(searchRepository),
-    getVideoTool(videoRepository),
-    getUpTool(spaceRepository),
-    getUpVideosTool(spaceRepository),
-    getCollectionTool(spaceRepository),
-    getHotCommentsTool(videoRepository, commentRepository),
-    getNativeRelatedTool(client),
-)
+    subtitleRepository: SubtitleRepository? = null,
+): List<Tool> = buildList {
+    add(searchVideosTool(searchRepository))
+    add(searchUsersTool(searchRepository))
+    add(getVideoTool(videoRepository))
+    if (subtitleRepository != null) {
+        add(getVideoSubtitleTool(videoRepository, subtitleRepository))
+    }
+    add(getUpTool(spaceRepository))
+    add(getUpVideosTool(spaceRepository))
+    add(getCollectionTool(spaceRepository))
+    add(getHotCommentsTool(videoRepository, commentRepository))
+    add(getNativeRelatedTool(client))
+}
 
 private fun searchVideosTool(searchRepository: SearchRepository) = object : Tool {
     override val name = "search_videos"
@@ -420,6 +426,119 @@ private fun getNativeRelatedTool(client: BiliClient) = object : Tool {
         ToolResult(forModel = "查询失败:${it.message}")
     }
 
+}
+
+private const val SUBTITLE_TRANSCRIPT_CHAR_BUDGET = 6_000
+private const val SUBTITLE_GROUP_WINDOW_MS = 8_000L
+
+private fun getVideoSubtitleTool(
+    videoRepository: VideoRepository,
+    subtitleRepository: SubtitleRepository,
+) = object : Tool {
+    override val name = "get_video_subtitle"
+    override val description = "读取指定视频的真实字幕正文(带时间点 [mm:ss]),用于总结视频核心内容、划分时间点或回答视频细节问题。"
+    override val parameters = schema(
+        """
+        {
+          "type": "object",
+          "properties": {
+            "bvid": {"type": "string", "description": "视频BV号"},
+            "page": {"type": "integer", "description": "分P序号(从1开始,默认1)"}
+          },
+          "required": ["bvid"]
+        }
+        """,
+    )
+
+    override val kind = StepKind.Subtitle
+    override fun subject(arguments: JsonObject, names: NameBook) = names.video(arguments.stringArg("bvid").orEmpty())
+
+    override suspend fun execute(arguments: JsonObject): ToolResult = runCatching {
+        val bvid = arguments.stringArg("bvid").orEmpty().trim()
+        if (bvid.isEmpty()) return@runCatching ToolResult(forModel = "缺少 bvid 参数")
+        val pageNumber = (arguments.intArg("page") ?: 1).coerceAtLeast(1)
+        when (val detailResult = videoRepository.getVideoDetail(bvid)) {
+            is BiliResult.Ok -> {
+                val detail = detailResult.value
+                val part = detail.pages.getOrNull(pageNumber - 1)
+                    ?: detail.pages.firstOrNull()
+                val cid = part?.cid ?: detail.cid
+                val trace = TraceItem(detail.bvid, detail.title, detail.coverUrl, detail.up.name)
+                val tracks = subtitleRepository.getTracks(detail.bvid, cid)
+                if (tracks.isEmpty()) {
+                    return@runCatching ToolResult(
+                        forModel = "视频《${detail.title}》(${detail.bvid}, P$pageNumber)没有可用字幕轨;可结合 get_video 简介与 get_hot_comments 热评回答并如实说明无字幕。",
+                        forUi = listOf(trace),
+                        bvids = setOf(detail.bvid),
+                    )
+                }
+                val chosen = tracks.first()
+                val cues = subtitleRepository.getCues(chosen.subtitleUrl)
+                if (cues.isEmpty()) {
+                    return@runCatching ToolResult(
+                        forModel = "视频《${detail.title}》(${detail.bvid})的字幕轨「${chosen.displayName}」内容为空或拉取失败。",
+                        forUi = listOf(trace),
+                        bvids = setOf(detail.bvid),
+                    )
+                }
+                val transcript = formatTranscriptForModel(cues, SUBTITLE_TRANSCRIPT_CHAR_BUDGET)
+                val header = "视频《${detail.title}》(UP:${detail.up.name}, 时长${formatDurationSeconds(detail.durationSeconds)}, 字幕:${chosen.displayName}, 共${cues.size}句):"
+                ToolResult(
+                    forModel = "$header\n$transcript",
+                    forUi = listOf(trace),
+                    bvids = setOf(detail.bvid),
+                    upNames = mapOf(detail.up.mid to detail.up.name),
+                )
+            }
+            else -> detailResult.toFailureResult()
+        }
+    }.getOrElse {
+        BiliLog.w("工具 $name 执行异常", it)
+        ToolResult(forModel = "读取字幕失败:${it.message}")
+    }
+}
+
+/**
+ * 将字幕行按时间窗口合并成段落并按字符预算均匀采样,确保长视频首尾与中段均覆盖而不撑爆模型上下文。
+ */
+internal fun formatTranscriptForModel(cues: List<SubtitleCue>, charBudget: Int = SUBTITLE_TRANSCRIPT_CHAR_BUDGET): String {
+    if (cues.isEmpty()) return ""
+    val chunks = mutableListOf<String>()
+    var windowStart = cues.first().fromMillis
+    val sb = StringBuilder()
+    for (cue in cues) {
+        val text = cue.text.replace("\n", " ").replace("\r", "").trim()
+        if (text.isEmpty()) continue
+        if (sb.isNotEmpty() && cue.fromMillis - windowStart >= SUBTITLE_GROUP_WINDOW_MS) {
+            chunks += "[${formatDurationSeconds(windowStart / 1000L)}] $sb"
+            sb.clear()
+            windowStart = cue.fromMillis
+        }
+        if (sb.isEmpty()) windowStart = cue.fromMillis
+        if (sb.isNotEmpty()) sb.append(' ')
+        sb.append(text)
+    }
+    if (sb.isNotEmpty()) {
+        chunks += "[${formatDurationSeconds(windowStart / 1000L)}] $sb"
+    }
+    val full = chunks.joinToString("\n")
+    if (full.length <= charBudget || chunks.size <= 2) return full.take(charBudget)
+
+    // 均匀采样保留首尾与全片分布
+    val avgChunkLen = (full.length.toDouble() / chunks.size).coerceAtLeast(1.0)
+    val targetCount = (charBudget / avgChunkLen).toInt().coerceIn(2, chunks.size)
+    val step = (chunks.size - 1).toDouble() / (targetCount - 1)
+    val sampled = buildList {
+        var lastIdx = -1
+        for (i in 0 until targetCount) {
+            val idx = (i * step).toInt().coerceIn(0, chunks.lastIndex)
+            if (idx != lastIdx) {
+                add(chunks[idx])
+                lastIdx = idx
+            }
+        }
+    }
+    return sampled.joinToString("\n").take(charBudget)
 }
 
 private fun schema(raw: String): JsonObject = Json.parseToJsonElement(raw).jsonObject

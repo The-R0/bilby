@@ -58,6 +58,7 @@ internal fun relatedSheetTitle(related: RelatedState): String {
         first.running -> stringResource(Res.string.related_title_running)
         first.error != null -> stringResource(Res.string.related_title_error)
         videoCount > 0 -> stringResource(Res.string.related_title_count, videoCount)
+        first.answer != null -> stringResource(Res.string.related_title_summary)
         else -> stringResource(Res.string.related_title)
     }
 }
@@ -80,6 +81,8 @@ fun RelatedSheet(
     onAsk: (String) -> Unit,
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
+    /** 点击回答里的时间点(如 `02:15`)时跳转到对应播放位置。 */
+    onTimestampClick: ((Long) -> Unit)? = null,
     /** 标题行右端的关闭。右栏常驻面板里给;模态 sheet 有统一标题行/把手,不重复画。 */
     onClose: (() -> Unit)? = null,
     /** 重新发起第一轮检索。空闲时可选提供。 */
@@ -171,7 +174,12 @@ fun RelatedSheet(
                         AgentQuestionBubble(text = it, modifier = Modifier.padding(horizontal = Spacing.Comfortable))
                     }
                     // 与搜索页共用同一个部件:同一个助理的同一种输出,两处必须长得一样。
-                    AgentTurnView(turn = turn.result, onVideoClick = onVideoClick, onRetry = onRetry)
+                    AgentTurnView(
+                        turn = turn.result,
+                        onVideoClick = onVideoClick,
+                        onRetry = onRetry,
+                        onTimestampClick = onTimestampClick,
+                    )
                 }
             }
         }

@@ -38,6 +38,7 @@ import androidx.compose.material.icons.outlined.PersonSearch
 import androidx.compose.material.icons.outlined.PlayCircleOutline
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.SelectAll
+import androidx.compose.material.icons.outlined.Subtitles
 import androidx.compose.material.icons.outlined.VideoLibrary
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -89,6 +90,7 @@ fun AgentTurnView(
     modifier: Modifier = Modifier,
     containerColor: Color = MaterialTheme.colorScheme.surfaceContainer,
     citationContainerColor: Color = MaterialTheme.colorScheme.surfaceContainerHigh,
+    onTimestampClick: ((Long) -> Unit)? = null,
 ) {
     var processExpanded by remember { mutableStateOf(true) }
     val hasAnswer = turn.answer != null
@@ -139,6 +141,7 @@ fun AgentTurnView(
                     answer = answer,
                     onVideoClick = onVideoClick,
                     citationContainerColor = citationContainerColor,
+                    onTimestampClick = onTimestampClick,
                 )
             }
 
@@ -380,6 +383,7 @@ private fun StepKind.icon(): ImageVector = when (this) {
     StepKind.Related -> Icons.Outlined.Explore
     StepKind.Memory -> Icons.Outlined.AutoAwesome
     StepKind.Taste -> Icons.Outlined.History
+    StepKind.Subtitle -> Icons.Outlined.Subtitles
     StepKind.Other -> Icons.Outlined.MoreHoriz
 }
 
@@ -395,6 +399,7 @@ private fun StepKind.labelRes(): StringResource = when (this) {
     StepKind.Related -> Res.string.agent_step_related
     StepKind.Memory -> Res.string.agent_step_memory
     StepKind.Taste -> Res.string.agent_step_taste
+    StepKind.Subtitle -> Res.string.agent_step_subtitle
     StepKind.Other -> Res.string.agent_process
 }
 

@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.PlaylistAdd
 import androidx.compose.material.icons.automirrored.outlined.PlaylistPlay
+import androidx.compose.material.icons.outlined.Block
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Person
@@ -62,11 +63,13 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.round
+import dev.bilby.data.ContentBlockMatcher
 import dev.bilby.player.QueueItem
 import dev.bilby.resources.Res
 import dev.bilby.resources.action_copy_title
 import dev.bilby.resources.action_share
 import dev.bilby.resources.comment_copied
+import dev.bilby.resources.menu_block_up
 import dev.bilby.resources.menu_copy_link
 import dev.bilby.resources.menu_open_space
 import dev.bilby.resources.menu_video_dislike
@@ -97,14 +100,25 @@ data class QueueMenuActions(
 val LocalQueueActions = staticCompositionLocalOf<QueueMenuActions?> { null }
 
 /**
- * 视频长按/右键「我不喜欢」动作,由 [dev.bilby.ui.BilbyApp] 提供。
- * 调用后真实上报 B 站接口并记录到本地偏好,支持撤销。
+ * 视频长按/右键「我不喜欢」与「屏蔽这位 UP 主」动作,由 [dev.bilby.ui.BilbyApp] 提供。
  */
 data class VideoDislikeActions(
     val dislike: (bvid: String, title: String, upMid: Long, upName: String) -> Unit,
+    val blockUp: (upMid: Long, upName: String) -> Unit = { _, _ -> },
 )
 
 val LocalVideoDislikeActions = staticCompositionLocalOf<VideoDislikeActions?> { null }
+
+/**
+ * 本地实时内容过滤状态(已标记「我不喜欢」的 bvid 集合 + UP/关键词屏蔽匹配器)。
+ * 由根部 [dev.bilby.ui.BilbyApp] 统一提供,让搜索结果等列表在点「我不喜欢」或屏蔽后立即隐藏。
+ */
+data class ContentFilterState(
+    val dislikedBvids: Set<String> = emptySet(),
+    val blockMatcher: ContentBlockMatcher = ContentBlockMatcher.EMPTY,
+)
+
+val LocalContentFilterState = staticCompositionLocalOf { ContentFilterState() }
 
 /**
  * 桌面右键菜单的动效方案:去掉移动端 `DropdownMenu` 默认的 `0.8 -> 1.0` 缩放弹簧,保留极短的
@@ -328,7 +342,10 @@ fun videoCommonMenuItemCount(
         if (includeQueueActions && LocalQueueActions.current != null) count += 2
         if (title == null || title.isNotBlank()) count += 1
         count += 2
-        if (LocalVideoDislikeActions.current != null) count += 1
+        if (LocalVideoDislikeActions.current != null) {
+            count += 1
+            if (upMid != 0L) count += 1
+        }
     }
     if (upMid != 0L && onOpenUpSpace != null) count += 1
     return count
@@ -441,6 +458,18 @@ fun VideoCommonMenuItems(
                 leadingIcon = { Icon(Icons.Outlined.ThumbDown, contentDescription = null) },
                 shape = menuItemShape(dislikeIndex, totalCount),
             )
+            if (upMid != 0L) {
+                val blockUpIndex = cursor++
+                DropdownMenuItem(
+                    onClick = {
+                        close()
+                        dislikeActions.blockUp(upMid, upName)
+                    },
+                    text = { Text(stringResource(Res.string.menu_block_up)) },
+                    leadingIcon = { Icon(Icons.Outlined.Block, contentDescription = null) },
+                    shape = menuItemShape(blockUpIndex, totalCount),
+                )
+            }
         }
     }
     if (upMid != 0L && onOpenUpSpace != null) {

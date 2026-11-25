@@ -6,11 +6,13 @@ import dev.bilby.api.BiliResult
 import dev.bilby.data.db.FeedCacheRepository
 import dev.bilby.data.model.DynamicCard
 import dev.bilby.data.model.FeedEntry
+import dev.bilby.data.model.plainText
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 
@@ -44,18 +46,59 @@ class DynamicFeedStore(
     private val repository: DynamicRepository,
     private val cache: FeedCacheRepository,
     settings: SettingsStore,
+    dislikeRepository: DislikeRepository? = null,
+    blockRuleRepository: BlockRuleRepository? = null,
 ) {
 
     private val _home = MutableStateFlow<List<FeedEntry>>(emptyList())
     private val _other = MutableStateFlow<List<DynamicCard>>(emptyList())
     private val _status = MutableStateFlow(DynamicFeedStatus())
 
-    val home: Flow<List<FeedEntry>> = combine(_home, settings.excludedFeedMids) { items, excluded ->
-        items.filterNot { it.upMid in excluded }
+    private val dislikedBvidsFlow: Flow<Set<String>> =
+        dislikeRepository?.observeDislikedBvids() ?: flowOf(emptySet())
+    private val blockMatcherFlow: Flow<ContentBlockMatcher> =
+        blockRuleRepository?.observeMatcher() ?: flowOf(ContentBlockMatcher.EMPTY)
+
+    val home: Flow<List<FeedEntry>> = combine(
+        _home,
+        settings.excludedFeedMids,
+        dislikedBvidsFlow,
+        blockMatcherFlow,
+    ) { items, excluded, disliked, matcher ->
+        items.filterNot { entry ->
+            if (entry.upMid in excluded) return@filterNot true
+            when (entry) {
+                is FeedEntry.Video -> matcher.matchesVideo(
+                    bvid = entry.bvid,
+                    upMid = entry.upMid,
+                    upName = entry.upName,
+                    title = entry.title,
+                    dislikedBvids = disliked,
+                )
+                is FeedEntry.Article -> matcher.matchesVideo(
+                    bvid = "",
+                    upMid = entry.upMid,
+                    upName = entry.upName,
+                    title = entry.title,
+                )
+            }
+        }
     }
 
-    val other: Flow<List<DynamicCard>> = combine(_other, settings.excludedFeedMids) { cards, excluded ->
-        cards.filterNot { it.author.mid in excluded }
+    val other: Flow<List<DynamicCard>> = combine(
+        _other,
+        settings.excludedFeedMids,
+        blockMatcherFlow,
+    ) { cards, excluded, matcher ->
+        cards.filterNot { card ->
+            card.author.mid in excluded ||
+                matcher.matchesVideo(
+                    bvid = "",
+                    upMid = card.author.mid,
+                    upName = card.author.name,
+                    title = card.text.plainText(),
+                )
+        }
     }
 
     val status: StateFlow<DynamicFeedStatus> = _status.asStateFlow()

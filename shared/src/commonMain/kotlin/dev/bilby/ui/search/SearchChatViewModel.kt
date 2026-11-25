@@ -9,10 +9,13 @@ import dev.bilby.agent.ChatMessage
 import dev.bilby.agent.TraceItem
 import dev.bilby.agent.reduce
 import dev.bilby.data.AgentSessionRepository
+import dev.bilby.data.BlockRuleRepository
+import dev.bilby.data.ContentBlockMatcher
 import dev.bilby.data.DislikeRepository
 import dev.bilby.data.SearchRepository
 import dev.bilby.data.db.AgentMemoryEntity
 import dev.bilby.data.db.AgentSessionEntity
+import dev.bilby.data.db.BlockRuleEntity
 import dev.bilby.data.db.DislikedVideoEntity
 import dev.bilby.BiliLog
 import dev.bilby.data.SettingsStore
@@ -70,6 +73,7 @@ class SearchChatViewModel(
     private val settings: SettingsStore,
     private val sessionRepository: AgentSessionRepository,
     private val dislikeRepository: DislikeRepository,
+    private val blockRuleRepository: BlockRuleRepository? = null,
     /** 展开 b23.tv 短链,即 `BiliClient.resolveRedirect`。 */
     private val resolveShortLink: suspend (String) -> String,
 ) : ViewModel() {
@@ -123,6 +127,11 @@ class SearchChatViewModel(
     /** 已标记「我不喜欢」的视频列表。 */
     val dislikedVideos: StateFlow<List<DislikedVideoEntity>> = dislikeRepository.observeDisliked()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** 本地 UP 主与关键词屏蔽规则列表。 */
+    val blockRules: StateFlow<List<BlockRuleEntity>> =
+        (blockRuleRepository?.observeRules() ?: kotlinx.coroutines.flow.flowOf(emptyList()))
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     /** 会话内多轮共享的上下文与持久化会话 id。 */
     private var activeSessionId: Long? = null
@@ -199,6 +208,16 @@ class SearchChatViewModel(
 
     fun removeDisliked(bvid: String, upMid: Long) {
         viewModelScope.launch { dislikeRepository.undoDislike(bvid, upMid) }
+    }
+
+    fun addKeywordBlock(keyword: String) {
+        val repo = blockRuleRepository ?: return
+        viewModelScope.launch { repo.addKeywordBlock(keyword) }
+    }
+
+    fun removeBlockRule(id: Long) {
+        val repo = blockRuleRepository ?: return
+        viewModelScope.launch { repo.removeRule(id) }
     }
 
     private val _state = MutableStateFlow(SearchChatUiState())
@@ -390,10 +409,12 @@ class SearchChatViewModel(
             try {
                 val currentMemories = sessionRepository.recentMemories()
                 val dislikedRows = dislikeRepository.recentDisliked(DISLIKE_PROMPT_LIMIT)
+                val blockRulesSummary = blockRuleRepository?.promptSummary().orEmpty()
                 val dislikedSummary = dislikedRows.map { row ->
                     if (row.upName.isNotBlank()) "《${row.title}》（UP 主：${row.upName}）" else "《${row.title}》"
-                }
+                } + blockRulesSummary
                 val dislikedBvids = dislikeRepository.allDislikedBvids()
+                val blockMatcher = blockRuleRepository?.currentMatcher() ?: ContentBlockMatcher.EMPTY
                 agentLoop.run(
                     intent = AgentIntent.Query(query),
                     history = history,
@@ -402,6 +423,7 @@ class SearchChatViewModel(
                     memories = currentMemories,
                     dislikedSummary = dislikedSummary,
                     dislikedBvids = dislikedBvids,
+                    blockMatcher = blockMatcher,
                     maxResults = PERSONALIZED_MAX_RESULTS,
                     onTurnComplete = { newMessages, seen, newTraces ->
                         history = history + newMessages

@@ -1,6 +1,7 @@
 package dev.bilby.agent
 
 import dev.bilby.BiliLog
+import dev.bilby.data.ContentBlockMatcher
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -56,6 +57,8 @@ class AgentLoop(
         dislikedSummary: List<String> = emptyList(),
         /** 用户标记「我不喜欢」的 bvid 集合:代码层硬过滤,绝不会出现在推荐卡片里。 */
         dislikedBvids: Set<String> = emptySet(),
+        /** 用户本地屏蔽的 UP 主与关键词匹配器:代码层硬过滤。 */
+        blockMatcher: ContentBlockMatcher = ContentBlockMatcher.EMPTY,
         /** 本轮最多保留多少条引用视频卡片。 */
         maxResults: Int = MAX_RESULTS,
         // 本轮新产生的消息与累积的状态,交给调用方落库。不做成事件是因为它属于持久化
@@ -133,6 +136,7 @@ class AgentLoop(
                     seenBvids = seenBvids,
                     traceByBvid = traceByBvid,
                     dislikedBvids = dislikedBvids,
+                    blockMatcher = blockMatcher,
                     maxResults = maxResults.coerceAtLeast(1),
                 )
                 // 纯文字的回答是合法的(问的是问题,不是找视频),所以只要正文不空就算交卷。
@@ -308,15 +312,26 @@ class AgentLoop(
         seenBvids: Set<String>,
         traceByBvid: Map<String, TraceItem>,
         dislikedBvids: Set<String>,
+        blockMatcher: ContentBlockMatcher,
         maxResults: Int,
     ): AgentAnswer {
         val sources = mutableListOf<AnswerSource>()
         val numberOf = mutableMapOf<String, Int>()
         val text = VIDEO_REF.replace(answer) { match ->
             val bvid = match.groupValues[1]
+            val trace = traceByBvid[bvid]
+            val blockedByRule = !blockMatcher.isEmpty && blockMatcher.matchesVideo(
+                bvid = bvid,
+                upName = trace?.upName.orEmpty(),
+                title = trace?.title.orEmpty(),
+            )
             val number = numberOf[bvid] ?: when {
                 bvid in dislikedBvids -> {
                     BiliLog.w("助理引用了用户标记不喜欢的视频,已过滤:$bvid")
+                    null
+                }
+                blockedByRule -> {
+                    BiliLog.w("助理引用了命中本地屏蔽规则的视频,已过滤:$bvid")
                     null
                 }
                 bvid !in seenBvids -> {
@@ -328,7 +343,7 @@ class AgentLoop(
                     null
                 }
                 else -> {
-                    sources += AnswerSource(bvid, traceByBvid[bvid])
+                    sources += AnswerSource(bvid, trace)
                     sources.size.also { numberOf[bvid] = it }
                 }
             }
@@ -364,6 +379,11 @@ class AgentLoop(
             append("用户正在看《$title》(UP:$upName,bvid:$bvid),想找相关的。")
             note?.takeIf { it.isNotBlank() }?.let { append("用户补充:$it") }
         }
+        is AgentIntent.Summarize -> buildString {
+            append("请总结用户当前正在看的视频《$title》(UP:$upName,bvid:$bvid)。")
+            append("先调用 get_video_subtitle 读取真实字幕;如该视频没有可用字幕,再结合 get_video 简介与 get_hot_comments 热评整理并如实说明无字幕。")
+            append("请按以下结构简明输出:1) 一句话核心结论;2) 3到6条带准确时间点(格式如 02:15 或 1:05:30,方便用户直接点击跳转)的分段要点;3) 如有值得关注的评论区补充或争议点,用一句话点出。")
+        }
     }
 
     private companion object {
@@ -388,7 +408,7 @@ class AgentLoop(
 你是一个 B 站内容助手。回答用户的问题,并在需要时结合用户口味发现高质量 B 站视频。
 
 做法:
-- 用工具去查,不要凭记忆回答。热评往往能反映内容质量和观众的真实评价,值得翻。
+- 用工具去查,不要凭记忆回答。热评往往能反映内容质量和观众的真实评价,值得翻;要总结视频内容或定位视频细节时,先调用 `get_video_subtitle` 读取真实字幕并标注 `mm:ss` 时间点。
 - 只能引用你在工具返回里真实见过的视频。
 - 当用户想让你推荐视频(如「按我口味推荐」「找同类型视频」「延伸我最近看的」)时:
   1. 先调用 `get_watch_history`、`get_favorites`、`get_followings`、`get_user_tastes` 了解用户近期的兴趣方向、常看 UP 主、已存偏好与不喜欢清单;

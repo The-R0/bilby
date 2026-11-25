@@ -70,4 +70,10 @@ sealed interface AgentIntent {
         val upName: String,
         val note: String? = null,
     ) : AgentIntent
+
+    data class Summarize(
+        val bvid: String,
+        val title: String,
+        val upName: String,
+    ) : AgentIntent
 }

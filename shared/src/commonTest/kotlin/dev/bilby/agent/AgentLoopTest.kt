@@ -1,5 +1,7 @@
 package dev.bilby.agent
 
+import dev.bilby.data.ContentBlockMatcher
+import dev.bilby.data.db.BlockRuleEntity
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.toList
@@ -285,6 +287,35 @@ class AgentLoopTest {
         assertTrue(systemText.contains("喜欢硬核科普与历史长视频"))
         assertTrue(systemText.contains("某营销号标题党"))
         assertEquals(8, events.filterIsInstance<AgentEvent.Answer>().single().bvids.size)
+    }
+
+    @Test
+    fun `命中本地屏蔽关键词或 UP 主规则的视频会被代码层硬过滤`() = runTest {
+        val traceGood = TraceItem("BV1good0000x", "硬核内核解析", "", "硬核科普UP")
+        val traceBlocked = TraceItem("BV1spam0000x", "震惊！标题党视频", "", "营销号")
+        val tool = object : Tool {
+            override val name = "search_videos"
+            override val description = "fake"
+            override val parameters = JsonObject(emptyMap())
+            override suspend fun execute(arguments: JsonObject) = ToolResult(
+                forModel = "BV1spam0000x BV1good0000x",
+                forUi = listOf(traceBlocked, traceGood),
+                bvids = setOf("BV1spam0000x", "BV1good0000x"),
+            )
+        }
+        val streamer = FakeStreamer { messages ->
+            if (messages.none { it.role == ChatMessage.ROLE_TOOL }) toolCall("search_videos", """{"kw":"x"}""")
+            else answer("看这条 [[BV1spam0000x]] 和 [[BV1good0000x]]")
+        }
+        val matcher = ContentBlockMatcher.fromRules(
+            listOf(BlockRuleEntity(id = 1, kind = BlockRuleEntity.KIND_KEYWORD, value = "震惊", label = "震惊", createdAt = 1L)),
+        )
+        val events = AgentLoop(streamer, ToolRegistry(listOf(tool)), json)
+            .run(intent = AgentIntent.Query("推荐"), blockMatcher = matcher)
+            .toList()
+
+        val answer = events.filterIsInstance<AgentEvent.Answer>().single().answer
+        assertEquals(listOf("BV1good0000x"), answer.sources.map { it.bvid })
     }
 
     /** 模型回话即交卷 —— 没有 submit_answer 那层信封了,答案就是带 [[bvid]] 的散文。 */

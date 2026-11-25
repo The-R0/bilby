@@ -12,6 +12,8 @@ import dev.bilby.api.WbiSigner
 import dev.bilby.data.AccountRepository
 import dev.bilby.data.AgentSessionRepository
 import dev.bilby.data.ArticleRepository
+import dev.bilby.data.BlockRuleRepository
+import dev.bilby.data.CollectionProgressRepository
 import dev.bilby.data.DanmakusRepository
 import dev.bilby.data.DislikeRepository
 import dev.bilby.data.DynamicFeedStore
@@ -150,7 +152,13 @@ class AppContainer(
      * 视图,而它们分属不同的导航目的地,ViewModel 的作用域套不住两边(见 DynamicFeedStore)。
      */
     val dynamicFeedStore: DynamicFeedStore by lazy {
-        DynamicFeedStore(dynamicRepository, feedCacheRepository, settings)
+        DynamicFeedStore(
+            repository = dynamicRepository,
+            cache = feedCacheRepository,
+            settings = settings,
+            dislikeRepository = dislikeRepository,
+            blockRuleRepository = blockRuleRepository,
+        )
     }
 
     /** 第三方直播归档,只读、无鉴权,见它自己的说明。 */
@@ -279,6 +287,16 @@ class AppContainer(
         DislikeRepository(database, videoActionRepository)
     }
 
+    /** 本地 UP 主与关键词屏蔽规则。 */
+    val blockRuleRepository: BlockRuleRepository by lazy {
+        BlockRuleRepository(database)
+    }
+
+    /** 合集/系列观看进度与已看记录。 */
+    val collectionProgressRepository: CollectionProgressRepository by lazy {
+        CollectionProgressRepository(database)
+    }
+
     val llmClient: LlmClient by lazy {
         LlmClient(httpClient, json) { settings.llmConfig.first() }
     }
@@ -290,7 +308,14 @@ class AppContainer(
 
     private val toolRegistry: ToolRegistry by lazy {
         ToolRegistry(
-            createBiliTools(searchRepository, videoRepository, spaceRepository, commentRepository, biliClient) +
+            createBiliTools(
+                searchRepository = searchRepository,
+                videoRepository = videoRepository,
+                spaceRepository = spaceRepository,
+                commentRepository = commentRepository,
+                client = biliClient,
+                subtitleRepository = subtitleRepository,
+            ) +
                 createTasteTools(
                     historyRepository = historyRepository,
                     favRepository = favRepository,

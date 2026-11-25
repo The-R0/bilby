@@ -1,7 +1,11 @@
 package dev.bilby.ui
 
+import dev.bilby.ui.components.AgentBatchActions
 import dev.bilby.ui.components.BilbySearchTopBar
+import dev.bilby.ui.components.ContentFilterState
 import dev.bilby.ui.components.EditableFocusTracker
+import dev.bilby.ui.components.LocalAgentBatchActions
+import dev.bilby.ui.components.LocalContentFilterState
 import dev.bilby.ui.components.LocalCopyNotice
 import dev.bilby.ui.components.LocalEditableFocusTracker
 import dev.bilby.ui.components.LocalPageRefreshRegistry
@@ -1215,6 +1219,54 @@ private fun BilbyApp(
         }
     }
 
+    val dislikedBvids by remember(container) {
+        container.dislikeRepository.observeDislikedBvids()
+    }.collectAsStateWithLifecycle(initialValue = emptySet())
+    val blockMatcher by remember(container) {
+        container.blockRuleRepository.observeMatcher()
+    }.collectAsStateWithLifecycle(initialValue = dev.bilby.data.ContentBlockMatcher.EMPTY)
+    val contentFilterState = remember(dislikedBvids, blockMatcher) {
+        ContentFilterState(dislikedBvids = dislikedBvids, blockMatcher = blockMatcher)
+    }
+
+    // 播放合集/系列视频时(含自动连播切集与暂停),自动同步本地合集观看进度。
+    val playingCollectionSource = appAudioState.queue?.source?.takeIf { it.id > 0L }
+    val playingQueueItem = appAudioState.queue?.current
+    LaunchedEffect(playingCollectionSource, playingQueueItem?.bvid) {
+        val source = playingCollectionSource ?: return@LaunchedEffect
+        val item = playingQueueItem ?: return@LaunchedEffect
+        val pos = (playback.currentPositionMillis() ?: 0L).coerceAtLeast(0L)
+        val dur = (item.durationSeconds * 1000L).coerceAtLeast(0L)
+        container.collectionProgressRepository.recordPlay(
+            mid = source.mid,
+            collectionId = source.id,
+            isSeason = source.isSeason,
+            bvid = item.bvid,
+            title = item.title,
+            coverUrl = item.coverUrl,
+            positionMillis = pos,
+            durationMillis = dur,
+        )
+    }
+    LaunchedEffect(playingCollectionSource, playingQueueItem?.bvid, appAudioState.isPlaying) {
+        val source = playingCollectionSource ?: return@LaunchedEffect
+        val item = playingQueueItem ?: return@LaunchedEffect
+        if (!appAudioState.isPlaying) {
+            val pos = (playback.currentPositionMillis() ?: 0L).coerceAtLeast(0L)
+            val dur = (item.durationSeconds * 1000L).coerceAtLeast(0L)
+            if (pos > 0L) {
+                container.collectionProgressRepository.updatePosition(
+                    mid = source.mid,
+                    collectionId = source.id,
+                    isSeason = source.isSeason,
+                    bvid = item.bvid,
+                    positionMillis = pos,
+                    durationMillis = dur,
+                )
+            }
+        }
+    }
+
     val dislikeSyncedBothText = stringResource(Res.string.dislike_synced_both)
     val dislikeSyncedViewText = stringResource(Res.string.dislike_synced_view)
     val dislikeSyncedFeedText = stringResource(Res.string.dislike_synced_feed)
@@ -1230,39 +1282,115 @@ private fun BilbyApp(
         dislikeUndoneText,
         undoLabel,
     ) {
-        VideoDislikeActions { bvid, title, upMid, upName ->
-            snackbarScope.launch {
-                val outcome = container.dislikeRepository.dislike(
-                    bvid = bvid,
-                    title = title,
-                    upMid = upMid,
-                    upName = upName,
-                )
-                val message = when {
-                    outcome.viewDislikeOk && outcome.feedDislikeOk -> dislikeSyncedBothText
-                    outcome.viewDislikeOk -> dislikeSyncedViewText
-                    outcome.feedDislikeOk -> dislikeSyncedFeedText
-                    else -> dev.bilby.getString(
-                        Res.string.dislike_local_only,
-                        outcome.errorMessage.orEmpty().ifBlank { "unknown" },
+        VideoDislikeActions(
+            dislike = { bvid, title, upMid, upName ->
+                snackbarScope.launch {
+                    val outcome = container.dislikeRepository.dislike(
+                        bvid = bvid,
+                        title = title,
+                        upMid = upMid,
+                        upName = upName,
                     )
+                    val message = when {
+                        outcome.viewDislikeOk && outcome.feedDislikeOk -> dislikeSyncedBothText
+                        outcome.viewDislikeOk -> dislikeSyncedViewText
+                        outcome.feedDislikeOk -> dislikeSyncedFeedText
+                        else -> dev.bilby.getString(
+                            Res.string.dislike_local_only,
+                            outcome.errorMessage.orEmpty().ifBlank { "unknown" },
+                        )
+                    }
+                    val res = snackbarHostState.showSnackbar(
+                        message = message,
+                        actionLabel = undoLabel,
+                        duration = SnackbarDuration.Short,
+                    )
+                    if (res == SnackbarResult.ActionPerformed) {
+                        container.dislikeRepository.undoDislike(bvid = bvid, upMid = upMid)
+                        snackbarHostState.showSnackbar(dislikeUndoneText, duration = SnackbarDuration.Short)
+                    }
                 }
-                val res = snackbarHostState.showSnackbar(
-                    message = message,
-                    actionLabel = undoLabel,
-                    duration = SnackbarDuration.Short,
-                )
-                if (res == SnackbarResult.ActionPerformed) {
-                    container.dislikeRepository.undoDislike(bvid = bvid, upMid = upMid)
-                    snackbarHostState.showSnackbar(dislikeUndoneText, duration = SnackbarDuration.Short)
+            },
+            blockUp = { upMid, upName ->
+                snackbarScope.launch {
+                    val label = upName.ifBlank { "UID $upMid" }
+                    container.blockRuleRepository.addUpBlock(mid = upMid, name = label)
+                    val res = snackbarHostState.showSnackbar(
+                        message = dev.bilby.getString(Res.string.block_up_added, label),
+                        actionLabel = undoLabel,
+                        duration = SnackbarDuration.Short,
+                    )
+                    if (res == SnackbarResult.ActionPerformed) {
+                        container.blockRuleRepository.removeUpBlock(upMid)
+                        snackbarHostState.showSnackbar(
+                            dev.bilby.getString(Res.string.block_up_undone, label),
+                            duration = SnackbarDuration.Short,
+                        )
+                    }
                 }
-            }
-        }
+            },
+        )
+    }
+
+    val agentBatchActions = remember(
+        container,
+        snackbarHostState,
+        snackbarScope,
+    ) {
+        AgentBatchActions(
+            enqueueAll = { items ->
+                if (items.isNotEmpty()) {
+                    val targetVideo = backStack.lastOrNull { it is Video } as? Video
+                    if (targetVideo != null) {
+                        items.forEach { item ->
+                            sendPlaybackCommand(PlaybackCommand.EnqueueItem(targetVideo.frame, item, playNext = false))
+                        }
+                        snackbarScope.launch {
+                            snackbarHostState.showSnackbar(
+                                dev.bilby.getString(Res.string.agent_batch_enqueued, items.size),
+                                duration = SnackbarDuration.Short,
+                            )
+                        }
+                    } else {
+                        val entries = items.map { item ->
+                            CustomQueueEntry(
+                                bvid = item.bvid,
+                                title = item.title,
+                                upName = item.upName,
+                                coverUrl = item.coverUrl,
+                                durationSeconds = item.durationSeconds,
+                            )
+                        }
+                        push(Video(bvid = entries.first().bvid, context = QueueContext.Custom(entries)))
+                    }
+                }
+            },
+            addAllToView = { targets ->
+                if (targets.isNotEmpty()) {
+                    snackbarScope.launch {
+                        var okCount = 0
+                        for ((bvid, _) in targets) {
+                            if (container.toViewRepository.add(bvid) is BiliResult.Ok) {
+                                okCount++
+                            }
+                        }
+                        val msg = if (okCount > 0) {
+                            dev.bilby.getString(Res.string.agent_batch_toview_done, okCount, targets.size)
+                        } else {
+                            dev.bilby.getString(Res.string.agent_batch_toview_failed)
+                        }
+                        snackbarHostState.showSnackbar(msg, duration = SnackbarDuration.Short)
+                    }
+                }
+            },
+        )
     }
 
     CompositionLocalProvider(
         LocalQueueActions provides queueMenuActions,
         LocalVideoDislikeActions provides videoDislikeActions,
+        LocalContentFilterState provides contentFilterState,
+        LocalAgentBatchActions provides agentBatchActions,
     ) {
     Box(
         modifier = Modifier
@@ -3138,6 +3266,7 @@ private fun SearchPane(
                     container.settings,
                     container.agentSessionRepository,
                     container.dislikeRepository,
+                    container.blockRuleRepository,
                     resolveShortLink = container.biliClient::resolveRedirect,
                 )
             }
@@ -3159,6 +3288,7 @@ private fun SearchPane(
     val agentSessions by vm.agentSessions.collectAsStateWithLifecycle()
     val agentMemories by vm.memories.collectAsStateWithLifecycle()
     val dislikedVideos by vm.dislikedVideos.collectAsStateWithLifecycle()
+    val blockRules by vm.blockRules.collectAsStateWithLifecycle()
     val searchLanding by remember(container.settings) {
         container.settings.appearancePrefs.map { it.searchLanding }.distinctUntilChanged()
     }.collectAsStateWithLifecycle(initialValue = true)
@@ -3194,6 +3324,7 @@ private fun SearchPane(
         agentSessions = agentSessions,
         agentMemories = agentMemories,
         dislikedVideos = dislikedVideos,
+        blockRules = blockRules,
         agentActions = AgentActions(
             onInputChange = vm::onAgentInputChange,
             onSend = vm::sendToAgent,
@@ -3205,6 +3336,8 @@ private fun SearchPane(
             onDeleteSession = vm::deleteSession,
             onDeleteMemory = vm::deleteMemory,
             onRemoveDisliked = vm::removeDisliked,
+            onAddKeywordBlock = vm::addKeywordBlock,
+            onRemoveBlockRule = vm::removeBlockRule,
         ),
         resultActions = SearchResultActions(
             onTabSelected = vm::onTabSelected,
@@ -4657,7 +4790,13 @@ private fun CollectionRoute(
         key = "collection-${key.mid}-${key.isSeason}-${key.id}",
         factory = viewModelFactory {
             initializer {
-                CollectionViewModel(key.mid, key.id, key.isSeason, container.spaceRepository)
+                CollectionViewModel(
+                    key.mid,
+                    key.id,
+                    key.isSeason,
+                    container.spaceRepository,
+                    container.collectionProgressRepository,
+                )
             }
         },
     )
@@ -4669,9 +4808,27 @@ private fun CollectionRoute(
         onLoadMore = { vm.loadMore() },
         onRefresh = vm::refresh,
         onSortChanged = vm::onSortChanged,
+        onResumeBvid = { resumeBvid ->
+            val index = state.items.indexOfFirst { it.bvid == resumeBvid }
+            val page = if (index >= 0) index / SpaceRepository.COLLECTION_PAGE_SIZE + 1 else 1
+            onVideoClick(
+                resumeBvid,
+                QueueContext.Collection(key.mid, key.id, key.isSeason, key.name, page, sort = state.sort),
+            )
+        },
         onVideoClick = { item ->
             val index = state.items.indexOf(item).coerceAtLeast(0)
             val page = index / SpaceRepository.COLLECTION_PAGE_SIZE + 1
+            container.persistScope.launch {
+                container.collectionProgressRepository.recordPlay(
+                    mid = key.mid,
+                    collectionId = key.id,
+                    isSeason = key.isSeason,
+                    bvid = item.bvid,
+                    title = item.title,
+                    coverUrl = item.coverUrl,
+                )
+            }
             onVideoClick(
                 item.bvid,
                 QueueContext.Collection(key.mid, key.id, key.isSeason, key.name, page, sort = state.sort),
@@ -5071,6 +5228,7 @@ private fun VideoPane(
                     container.persistScope,
                     container.agentSessionRepository,
                     container.dislikeRepository,
+                    container.blockRuleRepository,
                 )
             }
         },
@@ -5093,6 +5251,7 @@ private fun VideoPane(
     val subtitleTracks by vm.subtitleTracks.collectAsStateWithLifecycle()
     val subtitleLan by vm.subtitleLan.collectAsStateWithLifecycle()
     val subtitleCues by vm.subtitleCues.collectAsStateWithLifecycle()
+    val subtitlePrefs by vm.subtitlePrefs.collectAsStateWithLifecycle()
     val danmakuPrefs by vm.danmakuPrefs.collectAsStateWithLifecycle()
     val danmakuPool by vm.danmakuPool.collectAsStateWithLifecycle()
     val cached by vm.cached.collectAsStateWithLifecycle()
@@ -5140,6 +5299,7 @@ private fun VideoPane(
         commentState = commentState,
         sponsorSegments = sponsorSegments,
         onFindRelated = if (disableDiscovery || !agentAvailable) null else vm::findRelated,
+        onSummarize = if (disableDiscovery || !agentAvailable) null else vm::summarizeVideo,
         onAskRelated = vm::askRelated,
         onRetryRelated = vm::retryRelated,
         cached = cached,
@@ -5178,6 +5338,8 @@ private fun VideoPane(
         subtitleLan = subtitleLan,
         subtitleCues = subtitleCues,
         onSelectSubtitle = vm::selectSubtitle,
+        subtitlePrefs = subtitlePrefs,
+        subtitleEditor = vm.subtitleEditor,
         staffFollowed = staffFollowed,
         onFollowStaff = vm::followStaff,
         danmakuPrefs = danmakuPrefs,
