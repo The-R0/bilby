@@ -6,11 +6,15 @@ import androidx.compose.ui.Modifier
 import dev.bilby.player.PlayerHandle
 
 /**
- * 画面本身。Android 上是 media3 的 PlayerSurface,Surface 经 MediaController 送到 session 那一侧;
- * 桌面上是 mpv 渲染进 Compose 的那块纹理。
+ * 画面本身。Android 上由 SurfaceView 承接 MediaController 的视频输出并在原地缩放/全屏切换时
+ * 同步 SurfaceControl 几何边界;桌面上是 mpv 渲染进 Compose 的那块纹理。
  */
 @Composable
-expect fun VideoSurface(player: PlayerHandle, modifier: Modifier = Modifier)
+expect fun VideoSurface(
+    player: PlayerHandle,
+    modifier: Modifier = Modifier,
+    isFullscreen: Boolean = false,
+)
 
 /**
  * 画中画。Android 是系统的小窗;桌面是把主窗口本身缩小、去掉标题栏(见桌面入口的 WindowsPip)。

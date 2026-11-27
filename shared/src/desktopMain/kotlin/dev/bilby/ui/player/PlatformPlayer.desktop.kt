@@ -8,7 +8,7 @@ import dev.bilby.player.MpvPlayerHandle
 import dev.bilby.player.PlayerHandle
 
 @Composable
-actual fun VideoSurface(player: PlayerHandle, modifier: Modifier) {
+actual fun VideoSurface(player: PlayerHandle, modifier: Modifier, isFullscreen: Boolean) {
     BilbyMpvVideoSurface((player as MpvPlayerHandle).player, modifier)
 }
 

@@ -882,6 +882,7 @@ fun PlayerShell(
                 modifier = Modifier
                     .align(Alignment.Center)
                     .then(videoAspect?.let { Modifier.aspectRatio(it) } ?: Modifier.fillMaxSize()),
+                isFullscreen = isFullscreen,
             )
             // 未知不等于没有帧。Surface 必须先挂载(mpv 的输出初始化依赖它),但不能让未知
             // 比例的画面可见。只按尺寸揭开,不等可能早已发生的 onRenderedFirstFrame。
